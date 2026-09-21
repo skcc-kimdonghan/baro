@@ -97,6 +97,7 @@ test("irregular table rows preserve extra cells and ordinary backslashes", () =>
 
   assert.match(rendered.html, /C:\\Users/);
   assert.match(rendered.html, /LOST/);
+  assert.match(rendered.html, /<td[^>]*text-align:center;">LOST<\/td>/);
   assert.match(rendered.plainText, /C:\\Users\t정상\tLOST/);
 });
 
@@ -124,6 +125,57 @@ test("a divider immediately before the next H1 still separates articles", () => 
   assert.equal(result.articles.length, 2);
 });
 
+test("a divider before a numbered H2 stays inside the reference article", () => {
+  const result = formatArticles(`# 한 편의 글
+
+## 1. 첫 번째 질문인가요?
+
+A: 첫 답변입니다.
+
+---
+
+## 2. 두 번째 질문인가요?
+
+A: 둘째 답변입니다.`);
+
+  assert.equal(result.method, "single");
+  assert.equal(result.articles.length, 1);
+  assert.match(result.articles[0].html, /첫 번째 질문인가요\?/);
+  assert.match(result.articles[0].html, /두 번째 질문인가요\?/);
+  assert.equal((result.articles[0].html.match(/<hr /g) ?? []).length, 2);
+});
+
+test("an explicit divider before a generic H2 still separates articles", () => {
+  const result = splitArticles(`# 첫 글
+
+본문입니다.
+
+---
+
+## 둘째 글의 일반 소제목
+
+다음 본문입니다.`);
+
+  assert.equal(result.method, "divider");
+  assert.equal(result.articles.length, 2);
+  assert.match(result.articles[1].source, /둘째 글의 일반 소제목/);
+});
+
+test("a divider before a generic numbered question list still separates articles", () => {
+  const result = splitArticles(`# 첫 글
+
+첫 본문입니다.
+
+---
+
+1. 다음 글에서 확인할까요?
+2. 두 번째 항목도 볼까요?`);
+
+  assert.equal(result.method, "divider");
+  assert.equal(result.articles.length, 2);
+  assert.match(result.articles[1].source, /두 번째 항목도 볼까요\?/);
+});
+
 test("unsafe HTML and URL schemes never become executable markup", () => {
   const result = formatArticles(`# 안전 점검\n\n<script>alert(1)</script>\n\n[위험](javascript:alert(2))\n\n<img src=x onerror=alert(3)>`);
   const html = result.articles[0].html;
@@ -141,6 +193,76 @@ test("inline markdown becomes semantic, Naver-friendly HTML", () => {
   assert.match(rendered.html, /href="https:\/\/help\.naver\.com"/);
   assert.match(rendered.html, /<blockquote/);
   assert.match(rendered.html, /<ul/);
+});
+
+test("the reference Naver format turns question sections and answers into compact bold blocks", () => {
+  const article = splitArticles(`# 기준 양식
+
+“현장에서 바로 참여할 수 있을까요?”
+
+가능합니다.
+
+## 이 글에서 볼 내용
+
+1. 첫 번째 질문은 무엇인가요?
+2. 두 번째 질문은 무엇인가요?
+
+## 1. 첫 번째 질문은 무엇인가요?
+
+A: 핵심 답변을 먼저 안내합니다.
+
+자세한 설명을 이어갑니다.
+
+## 2. 두 번째 질문은 무엇인가요?
+
+A: 두 번째 답변입니다.
+
+## 그래서, 직접 해볼 만할까요?
+
+마무리 판단을 안내합니다.`).articles[0];
+  const rendered = renderArticle(article);
+
+  assert.match(rendered.html, /font-size:16px[^>]*>.*이 글에서 볼 내용/s);
+  assert.match(rendered.html, /<ol[^>]*>.*첫 번째 질문은 무엇인가요\?.*두 번째 질문은 무엇인가요\?/s);
+  assert.match(rendered.html, /<strong>1\. 첫 번째 질문은 무엇인가요\?<\/strong>/);
+  assert.match(rendered.html, /<strong>A: 핵심 답변을 먼저 안내합니다\.<\/strong>/);
+  assert.match(rendered.html, /<strong>그래서, 직접 해볼 만할까요\?<\/strong>/);
+  assert.equal((rendered.html.match(/<hr /g) ?? []).length, 3);
+  assert.doesNotMatch(rendered.html, /<h2[^>]*>1\. 첫 번째 질문/);
+});
+
+test("numbered question lists remain lists unless followed by an A summary", () => {
+  const listArticle = splitArticles(`# 질문 목록
+
+1. 첫 번째 질문인가요?
+2. 두 번째 질문인가요?`).articles[0];
+  const listRendered = renderArticle(listArticle);
+
+  assert.match(listRendered.html, /<ol/);
+  assert.equal((listRendered.html.match(/<hr /g) ?? []).length, 0);
+
+  const sectionArticle = splitArticles(`# 질문 섹션
+
+1. 첫 번째 질문인가요?
+
+A: 핵심 답변입니다.`).articles[0];
+  const sectionRendered = renderArticle(sectionArticle);
+
+  assert.match(sectionRendered.html, /<strong>1\. 첫 번째 질문인가요\?<\/strong>/);
+  assert.match(sectionRendered.html, /<strong>A: 핵심 답변입니다\.<\/strong>/);
+});
+
+test("reference tables use the sampled gray header and center unmarked columns", () => {
+  const article = splitArticles(`# 표 기준
+
+| 구분 | 내용 |
+| --- | --- |
+| 행사 | 현장 미션 |`).articles[0];
+  const rendered = renderArticle(article);
+
+  assert.match(rendered.html, /background-color:#F7F7F7/);
+  assert.match(rendered.html, /<th[^>]*text-align:center/);
+  assert.match(rendered.html, /<td[^>]*text-align:center/);
 });
 
 test("empty and oversized input fail with clear validation codes", () => {

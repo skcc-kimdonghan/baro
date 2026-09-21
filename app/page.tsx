@@ -51,6 +51,7 @@ type FormatResult = {
 type CopyStatus = Record<string, string>;
 
 const HEADER_COLORS = [
+  { value: "#F7F7F7", label: "기준 회색" },
   { value: "#DFF7E8", label: "민트" },
   { value: "#E8F1FF", label: "블루" },
   { value: "#FFF1CC", label: "옐로" },
@@ -66,19 +67,40 @@ const METHOD_LABELS = {
 
 const EXAMPLE_TEXT = `# 첫 번째 글: 아침 루틴을 가볍게 만드는 법
 
-바쁜 아침에는 할 일을 더하는 것보다 순서를 단순하게 만드는 편이 좋습니다.
+“바쁜 아침을 조금 더 가볍게 시작할 수 있을까요?”
 
-## 10분 루틴
+가능합니다.
+
+해야 할 일을 늘리기보다 순서를 단순하게 만드는 것이 핵심입니다.
+
+## 이 글에서 볼 내용
+
+1. 10분 루틴은 어떻게 구성하나요?
+2. 어떤 순서로 시작하면 좋을까요?
+
+## 1. 10분 루틴은 어떻게 구성하나요?
+
+A: 물 한 잔, 일정 확인, 스트레칭 순서로 시작하면 됩니다.
 
 - 창문을 열고 물 한 잔 마시기
 - 오늘 가장 중요한 일 한 가지 적기
 - 휴대폰은 준비가 끝난 뒤 확인하기
 
-| 순서 | 할 일 | 권장 시간 |
-| --- | --- | ---: |
-| 1 | 물 마시기 | 1분 |
-| 2 | 일정 확인 | 3분 |
-| 3 | 가벼운 스트레칭 | 6분 |
+| 순서 | 추천 흐름 |
+| --- | --- |
+| 1 | 물 마시기 · 1분 |
+| 2 | 일정 확인 · 3분 |
+| 3 | 가벼운 스트레칭 · 6분 |
+
+## 2. 어떤 순서로 시작하면 좋을까요?
+
+A: 가장 부담 없는 행동부터 시작해 흐름을 만드는 편이 좋습니다.
+
+## 그래서, 내일부터 해볼 만할까요?
+
+세 가지를 모두 하기 어렵다면 물 한 잔부터 시작해도 충분합니다.
+
+#아침루틴 #생활습관 #시간관리
 
 ---
 
@@ -290,7 +312,7 @@ export default function Home() {
             </h1>
           </div>
           <p className="max-w-xl text-sm leading-6 text-[var(--muted-ink)] lg:text-right">
-            마크다운 기호와 들쭉날쭉한 문단을 정리하고 표 제목행까지 손봅니다.
+            질문형 소제목, A: 핵심 답변, 구분선과 회색 표 제목행을 기준 글 양식에 맞춰 정리합니다.
             제목과 본문은 글별로 따로 복사할 수 있어요.
           </p>
         </section>
@@ -302,7 +324,7 @@ export default function Home() {
                 <span className="step-number">1</span>
                 <div>
                   <h2 className="font-bold tracking-[-0.02em]">GPT 글 묶음 붙여넣기</h2>
-                  <p className="text-xs text-[var(--muted-ink)]">글 사이는 --- 또는 # 큰 제목으로 구분</p>
+                  <p className="text-xs text-[var(--muted-ink)]">글 사이는 --- 또는 # 큰 제목으로 구분 · 기준 글 양식 자동 적용</p>
                 </div>
               </div>
               <Button
@@ -411,6 +433,9 @@ export default function Home() {
                   <div className="flex items-center gap-2 text-sm font-semibold text-[#26563e]">
                     <Check className="size-4" aria-hidden="true" />
                     {METHOD_LABELS[result.method]}
+                    <Badge variant="outline" className="border-slate-200 bg-white text-slate-700">
+                      기준 글 양식 적용
+                    </Badge>
                   </div>
                   <div className="flex items-center gap-2" role="radiogroup" aria-label="표 제목행 색상">
                     <span className="mr-1 text-xs text-[var(--muted-ink)]">표 제목색</span>
