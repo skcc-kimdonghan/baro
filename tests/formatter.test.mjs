@@ -61,6 +61,39 @@ test("numbered article labels split content and preserve the label title", () =>
   );
 });
 
+test("Korean episode labels such as 1편 and 2편 split pasted article bundles", () => {
+  const result = splitArticles(`1편: 봄 여행
+제주로 갑니다.
+
+2편 여름 여행
+강릉으로 갑니다.
+
+3편
+# 가을 여행
+설악산으로 갑니다.`);
+
+  assert.equal(result.method, "label");
+  assert.deepEqual(
+    result.articles.map((article) => article.title),
+    ["봄 여행", "여름 여행", "가을 여행"],
+  );
+  assert.match(result.articles[2].bodySource, /설악산으로 갑니다/);
+});
+
+test("episode words inside ordinary sentences do not split articles", () => {
+  const result = splitArticles(`# 드라마 감상
+
+1편을 보고 오늘 2편도 이어서 봤습니다.
+
+\`\`\`txt
+1편: 코드 예시
+2편: 코드 예시
+\`\`\``);
+
+  assert.equal(result.method, "single");
+  assert.equal(result.articles.length, 1);
+});
+
 test("dividers inside fenced code do not split articles", () => {
   const result = splitArticles(`# 코드 예시\n\n\`\`\`md\n---\n\`\`\`\n\n본문`);
 

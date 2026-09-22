@@ -90,7 +90,7 @@ const HEADER_COLORS = [
 
 const METHOD_LABELS = {
   divider: "구분선으로 분리",
-  label: "글 번호로 분리",
+  label: "글·편 번호로 분리",
   heading: "큰 제목으로 분리",
   single: "한 편으로 유지",
 };
@@ -456,7 +456,7 @@ export default function Home() {
                 <span className="step-number">1</span>
                 <div>
                   <h2 className="font-bold tracking-[-0.02em]">GPT 글 묶음 붙여넣기</h2>
-                  <p className="text-xs text-[var(--muted-ink)]">글 사이는 --- 또는 # 큰 제목으로 구분 · 기준 글 양식 자동 적용</p>
+                  <p className="text-xs text-[var(--muted-ink)]">글 사이는 --- · 1편/2편 · # 큰 제목으로 자동 구분</p>
                 </div>
               </div>
               <Button
