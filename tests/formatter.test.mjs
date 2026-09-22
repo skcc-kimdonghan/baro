@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 
 import {
   DEFAULT_HEADER_COLOR,
@@ -251,6 +252,247 @@ test("a visual divider before the H1 is discarded with the leading title", () =>
   assert.equal(result.articles[0].title, "실제 제목");
   assert.doesNotMatch(result.articles[0].html, /실제 제목|<hr /);
   assert.match(result.articles[0].html, /본문입니다/);
+});
+
+test("high-confidence GPT preamble and editorial notes are removed before articles", () => {
+  const result = formatArticles(`폰에서 바로 복붙할 수 있도록 **2개 글을 각각 따로 복사 가능한 블록**으로 나눴습니다.
+
+1번 글은 세부 공연표가 공개되지 않은 상태라 그 부분은 억지로 만들지 않았습니다. ([삼성물산 뉴스룸][1])
+
+[1]: https://news.samsungcnt.com/example
+
+# 첫 번째 글
+
+첫 글 본문입니다.
+
+# 두 번째 글
+
+둘째 글 본문입니다.`);
+
+  assert.equal(result.method, "heading");
+  assert.equal(result.articles.length, 2);
+  const copied = result.articles.map(({ html, plainText }) => `${html}\n${plainText}`).join("\n");
+  assert.doesNotMatch(copied, /바로 복붙|복사 가능한 블록|나눴습니다/);
+  assert.doesNotMatch(copied, /억지로 만들지 않았습니다/);
+  assert.doesNotMatch(copied, /삼성물산 뉴스룸|\[1\]|news\.samsungcnt/);
+  assert.match(copied, /첫 글 본문입니다/);
+  assert.match(copied, /둘째 글 본문입니다/);
+});
+
+test("reference citations are removed while substantive unpublished-status text remains", () => {
+  const article = formatArticles(`# 행사 안내
+
+세부 공연표는 아직 공개되지 않았습니다. ([삼성물산 뉴스룸][1])
+
+공식 발표 뒤 다시 확인하세요.
+
+[1]: https://news.samsungcnt.com/example`).articles[0];
+
+  assert.match(article.plainText, /세부 공연표는 아직 공개되지 않았습니다\./);
+  assert.match(article.plainText, /공식 발표 뒤 다시 확인하세요\./);
+  assert.doesNotMatch(article.html, /삼성물산 뉴스룸|\[1\]|news\.samsungcnt/);
+  assert.doesNotMatch(article.plainText, /삼성물산 뉴스룸|\[1\]|news\.samsungcnt/);
+});
+
+test("near-miss body text, normal links, brackets, and fenced references are preserved", () => {
+  const article = formatArticles(`# 보존 점검
+
+폰에서 바로 복붙하면 확인이 편리합니다.
+
+1번 버스를 타면 행사장에 도착합니다.
+
+[참고] 세부 일정은 변경될 수 있습니다.
+
+[공식 안내](https://example.com)를 확인하세요.
+
+\`\`\`md
+[문서][1]
+[1]: https://example.com/reference
+\`\`\``).articles[0];
+
+  assert.match(article.plainText, /폰에서 바로 복붙하면 확인이 편리합니다/);
+  assert.match(article.plainText, /1번 버스를 타면/);
+  assert.match(article.plainText, /\[참고\]/);
+  assert.match(article.html, /href="https:\/\/example\.com"/);
+  assert.match(article.plainText, /\[문서\]\[1\]/);
+  assert.match(article.plainText, /\[1\]: https:\/\/example\.com\/reference/);
+});
+
+test("real topic introductions about copying files and numbered algorithms are preserved", () => {
+  const copyGuide = formatArticles(`여러 개의 사진을 각각 다른 폴더로 복사하는 방법을 정리했습니다.
+
+# 사진 백업 가이드
+
+폴더별로 사진을 확인합니다.`).articles[0];
+  const algorithmGuide = formatArticles(`1번 알고리즘은 누락값을 임의로 만들어 넣지 않았습니다.
+
+# 데이터 처리 원칙
+
+원본 값을 보존합니다.`).articles[0];
+
+  assert.match(copyGuide.plainText, /여러 개의 사진을 각각 다른 폴더로 복사/);
+  assert.match(algorithmGuide.plainText, /1번 알고리즘은 누락값을 임의로 만들어 넣지 않았습니다/);
+});
+
+test("tilde and long backtick fences preserve reference definitions", () => {
+  const result = formatArticles(`# 코드 보존
+
+~~~md
+[코드 안 제목][1]
+---
+# 가짜 글 제목
+~~~not-a-close
+[틸드 문서][1]
+[1]: https://example.com/tilde
+~~~
+
+\`\`\`\`md
+\`\`\`
+# 두 번째 가짜 글 제목
+[긴 펜스 문서][2]
+[2]: https://example.com/long
+\`\`\`\`
+
+일반 본문입니다.`);
+
+  const article = result.articles[0];
+
+  assert.equal(result.method, "single");
+  assert.equal(result.articles.length, 1);
+  assert.equal((article.html.match(/<pre /g) ?? []).length, 2);
+  assert.match(article.plainText, /\[1\]: https:\/\/example\.com\/tilde/);
+  assert.match(article.plainText, /\[2\]: https:\/\/example\.com\/long/);
+  assert.match(article.plainText, /일반 본문입니다/);
+});
+
+test("space-separated reference citations are removed with their definitions", () => {
+  const article = formatArticles(`# 다중 인용
+
+필요한 본문입니다. ([자료 A][1] [자료 B][2])
+
+[1]: https://example.com/a
+[2]: https://example.com/b`).articles[0];
+
+  assert.equal(article.plainText, "필요한 본문입니다.");
+  assert.doesNotMatch(article.html, /자료 A|자료 B|example\.com|\[[12]\]/);
+});
+
+test("a real introduction next to a meta line is preserved", () => {
+  const article = formatArticles(`폰에서 바로 복붙할 수 있도록 2개 글을 각각 따로 복사 가능한 블록으로 나눴습니다.
+오늘은 가족과 함께 갈 만한 공연을 소개합니다.
+
+# 첫 번째 글
+
+첫 본문입니다.
+
+# 두 번째 글
+
+둘째 본문입니다.`).articles[0];
+
+  assert.doesNotMatch(article.plainText, /복사 가능한 블록|나눴습니다/);
+  assert.match(article.plainText, /오늘은 가족과 함께 갈 만한 공연을 소개합니다/);
+});
+
+test("bare reference-style citation tokens are removed with their definitions", () => {
+  const article = formatArticles(`# 출처 정리
+
+필요한 본문입니다. [삼성물산 뉴스룸][1]
+
+[1]: https://example.com/source`).articles[0];
+
+  assert.equal(article.plainText, "필요한 본문입니다.");
+  assert.doesNotMatch(article.html, /삼성물산|\[1\]|example\.com/);
+});
+
+test("headings and article labels inside fences never become the article title", () => {
+  const article = formatArticles(`~~~md
+# 가짜 제목
+글 2: 가짜 글 라벨
+~~~
+
+실제 첫 문장입니다.`).articles[0];
+
+  assert.equal(article.title, "실제 첫 문장입니다.");
+  assert.match(article.plainText, /# 가짜 제목/);
+  assert.match(article.plainText, /글 2: 가짜 글 라벨/);
+});
+
+test("reference syntax inside inline code and normal Markdown links is preserved", () => {
+  const article = formatArticles(`# 인라인 보존
+
+참조 문법은 \`[문서][1]\`처럼 작성합니다.
+
+[정상 링크](https://example.com/path/[문서][1])를 확인합니다.`).articles[0];
+
+  assert.match(article.plainText, /\[문서\]\[1\]/);
+  assert.match(article.html, /<code[^>]*>\[문서\]\[1\]<\/code>/);
+  assert.match(article.html, /href="https:\/\/example\.com\/path\/\[문서\]\[1\]"/);
+});
+
+test("inline code nested in a Markdown link never leaks placeholder tokens", () => {
+  const article = formatArticles(`# 중첩 인라인 보존
+
+[\`[문서][1]\` 설명](https://example.com)을 확인합니다.`).articles[0];
+
+  assert.doesNotMatch(article.html, /\u0000|literal-/);
+  assert.doesNotMatch(article.plainText, /\u0000|literal-/);
+  assert.match(article.html, /href="https:\/\/example\.com"/);
+  assert.match(article.html, /\[문서\]\[1\]/);
+});
+
+test("spaces around adjacent inline literals remain intact", () => {
+  const article = formatArticles(`# 공백 보존
+
+문법은 \`a\` \`b\` 입니다.
+
+본문 [정상 링크](https://example.com) 앞 공백도 유지합니다.`).articles[0];
+
+  assert.match(article.plainText, /문법은 a b 입니다\./);
+  assert.match(article.plainText, /본문 정상 링크 \(https:\/\/example\.com\) 앞 공백/);
+  assert.match(article.html, /문법은 <code[^>]*>a<\/code> <code[^>]*>b<\/code> 입니다\./);
+  assert.match(article.html, /본문 <a href=/);
+});
+
+test("malformed repeated Markdown links render within a bounded time", () => {
+  const source = `# 링크 성능\n\n${"[a](".repeat(24_990)}`;
+  const article = splitArticles(source).articles[0];
+  const startedAt = performance.now();
+  const rendered = renderArticle(article);
+  const elapsed = performance.now() - startedAt;
+
+  assert.ok(elapsed < 1_000, `rendering took ${elapsed.toFixed(1)}ms`);
+  assert.match(rendered.plainText, /\[a\]\(/);
+});
+
+test("images use the same upload placeholder in rich and plain copy", () => {
+  const article = formatArticles(`# 이미지 안내
+
+![행사 포스터](https://example.com/poster.jpg)`).articles[0];
+
+  assert.match(article.html, /\[이미지: 행사 포스터\]/);
+  assert.doesNotMatch(article.html, /<a href=/);
+  assert.match(article.plainText, /\[이미지: 행사 포스터\]/);
+});
+
+test("nested-parenthesis links preserve reference-like text inside their URL", () => {
+  const article = formatArticles(`# 링크 보존
+
+[정상 링크](https://example.com/a(b(c))[문서][1])를 확인합니다.`).articles[0];
+
+  assert.match(article.html, /href="https:\/\/example\.com\/a\(b\(c\)\)\[문서\]\[1\]"/);
+  assert.match(article.plainText, /https:\/\/example\.com\/a\(b\(c\)\)\[문서\]\[1\]/);
+});
+
+test("links with inline-code labels and link syntax inside code remain intact", () => {
+  const article = formatArticles(`# 혼합 리터럴 보존
+
+[\`코드\` 링크](https://example.com/a(b(c))[문서][1])
+
+\`[코드 링크](https://example.com/[자료][2])\``).articles[0];
+
+  assert.match(article.html, /href="https:\/\/example\.com\/a\(b\(c\)\)\[문서\]\[1\]"/);
+  assert.match(article.html, /<code[^>]*>\[코드 링크\]\(https:\/\/example\.com\/\[자료\]\[2\]\)<\/code>/);
+  assert.match(article.plainText, /https:\/\/example\.com\/\[자료\]\[2\]/);
 });
 
 test("an explicit divider before a generic H2 still separates articles", () => {
