@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ClipboardEvent as ReactClipboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -30,6 +30,7 @@ import { PublicationHistoryPanel } from "@/components/publication-history-panel"
 import { usePublicationHistory } from "@/hooks/use-publication-history";
 import { MAX_COMPARISON_LENGTH, comparePublishedArticle } from "@/lib/article-comparison.mjs";
 import { copyArticle } from "@/lib/clipboard.mjs";
+import { composePastedValue, shouldAutoFormatPaste } from "@/lib/paste-workflow.mjs";
 import {
   DEFAULT_HEADER_COLOR,
   MAX_INPUT_LENGTH,
@@ -167,6 +168,7 @@ export default function Home() {
   const [copyStatus, setCopyStatus] = useState<CopyStatus>({});
   const [publicationReviews, setPublicationReviews] = useState<PublicationReviews>({});
   const publicationRevisionRef = useRef(0);
+  const resultSectionRef = useRef<HTMLElement | null>(null);
   const history = usePublicationHistory();
 
   const totalCharacters = useMemo(
@@ -191,6 +193,50 @@ export default function Home() {
       return null;
     }
   }, []);
+
+  const revealResults = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const section = resultSectionRef.current;
+      if (!section) return;
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      section.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      section.focus({ preventScroll: true });
+    });
+  }, []);
+
+  const handleFormatAndReveal = useCallback((content: string, successMessage = "") => {
+    const nextResult = runFormat(content, headerColor);
+    if (!nextResult) return null;
+    revealResults();
+    if (successMessage) toast.success(successMessage);
+    return nextResult;
+  }, [headerColor, revealResults, runFormat]);
+
+  const handleInputPaste = useCallback((event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = event.clipboardData.getData("text/plain");
+    if (!pastedText) return;
+
+    const pasteInput = {
+      currentValue: event.currentTarget.value,
+      pastedText,
+      selectionStart: event.currentTarget.selectionStart,
+      selectionEnd: event.currentTarget.selectionEnd,
+    };
+    if (!shouldAutoFormatPaste(pasteInput)) return;
+
+    event.preventDefault();
+    const nextInput = composePastedValue(pasteInput);
+    if (nextInput.length > MAX_INPUT_LENGTH) {
+      const message = `입력은 ${MAX_INPUT_LENGTH.toLocaleString("ko-KR")}자까지 정리할 수 있습니다.`;
+      setError(message);
+      toast.error(message);
+      return;
+    }
+
+    setInput(nextInput);
+    const nextResult = handleFormatAndReveal(nextInput);
+    if (nextResult) toast.success(`${nextResult.articles.length}편으로 자동 정리했습니다.`);
+  }, [handleFormatAndReveal]);
 
   const handleColorChange = (color: string) => {
     setHeaderColor(color);
@@ -434,7 +480,7 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <div className="mx-auto max-w-[1500px] px-4 pt-6 pb-24 sm:px-6 lg:px-8 lg:py-8">
         <section className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <Badge className="mb-3 bg-[#17231d] text-white">3~5개 원고 한 번에</Badge>
@@ -459,23 +505,35 @@ export default function Home() {
                   <p className="text-xs text-[var(--muted-ink)]">글 사이는 --- · 1편/2편 · # 큰 제목으로 자동 구분</p>
                 </div>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-emerald-800 hover:bg-emerald-50 hover:text-emerald-900"
-                onClick={() => {
-                  publicationRevisionRef.current += 1;
-                  setInput(EXAMPLE_TEXT);
-                  setResult(null);
-                  setExpandedIds([]);
-                  setCopyStatus({});
-                  setPublicationReviews({});
-                  setError("");
-                }}
-              >
-                예시 불러오기
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-emerald-800 hover:bg-emerald-50 hover:text-emerald-900"
+                  onClick={() => {
+                    publicationRevisionRef.current += 1;
+                    setInput(EXAMPLE_TEXT);
+                    setResult(null);
+                    setExpandedIds([]);
+                    setCopyStatus({});
+                    setPublicationReviews({});
+                    setError("");
+                  }}
+                >
+                  예시 불러오기
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="bg-[var(--brand)] text-white hover:bg-[#02b351]"
+                  disabled={!input.trim()}
+                  onClick={() => handleFormatAndReveal(input)}
+                >
+                  <Sparkles className="size-4" aria-hidden="true" />
+                  바로 정리
+                </Button>
+              </div>
             </div>
 
             <CardContent className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
@@ -486,6 +544,7 @@ export default function Home() {
                   aria-invalid={Boolean(error)}
                   value={input}
                   maxLength={MAX_INPUT_LENGTH}
+                  onPaste={handleInputPaste}
                   onChange={(event) => {
                     publicationRevisionRef.current += 1;
                     setInput(event.target.value);
@@ -510,7 +569,7 @@ export default function Home() {
               ) : (
                 <p id="input-help" className="flex items-center gap-2 text-xs leading-5 text-[var(--muted-ink)]">
                   <ShieldCheck className="size-4 shrink-0 text-emerald-600" aria-hidden="true" />
-                  정리 중에는 저장하지 않으며, 비교 완료 시 두 원고만 이 브라우저 히스토리에 저장합니다.
+                  붙여넣으면 자동으로 정리해 결과로 이동합니다. 작성 중 원고는 저장하지 않습니다.
                 </p>
               )}
 
@@ -518,7 +577,7 @@ export default function Home() {
                 <Button
                   type="button"
                   className="h-12 flex-1 rounded-xl bg-[var(--brand)] text-base font-bold text-white shadow-[0_10px_24px_rgba(3,199,90,0.2)] hover:bg-[#02b351]"
-                  onClick={() => runFormat(input, headerColor)}
+                  onClick={() => handleFormatAndReveal(input)}
                 >
                   <Sparkles className="size-4.5" aria-hidden="true" />
                   글별로 정리하기
@@ -532,7 +591,7 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <section aria-labelledby="result-title" className="min-w-0">
+          <section ref={resultSectionRef} aria-labelledby="result-title" tabIndex={-1} className="min-w-0 scroll-mt-4 outline-none">
             <div className="mb-3 flex min-h-10 flex-wrap items-center justify-between gap-3 px-1">
               <div className="flex items-center gap-2.5">
                 <span className="step-number">2</span>
@@ -797,6 +856,22 @@ export default function Home() {
             )}
           </section>
         </section>
+
+        {input.trim() && !result && (
+          <div
+            className="fixed inset-x-4 z-40 lg:hidden"
+            style={{ bottom: "calc(1rem + env(safe-area-inset-bottom))" }}
+          >
+            <Button
+              type="button"
+              className="h-12 w-full rounded-xl bg-[var(--brand)] text-base font-bold text-white shadow-[0_14px_35px_rgba(3,120,67,0.3)] hover:bg-[#02b351]"
+              onClick={() => handleFormatAndReveal(input)}
+            >
+              <Sparkles className="size-4.5" aria-hidden="true" />
+              글별로 바로 정리
+            </Button>
+          </div>
+        )}
 
         <PublicationHistoryPanel
           entries={history.entries}
