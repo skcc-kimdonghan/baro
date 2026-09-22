@@ -187,10 +187,18 @@ export default function Home() {
     if (!result) return;
     setResult({
       ...result,
-      articles: result.articles.map((article) =>
-        article.id === articleId ? { ...article, title } : article,
-      ),
+      articles: result.articles.map((article) => {
+        if (article.id !== articleId) return article;
+        const titledArticle = { ...article, title };
+        const rendered = renderArticle(titledArticle, { headerColor });
+        return {
+          ...titledArticle,
+          ...rendered,
+          characterCount: rendered.plainText.length,
+        };
+      }),
     });
+    setCopyStatus({});
   };
 
   const handleCopy = async (

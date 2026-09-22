@@ -6,6 +6,7 @@ import {
   DEFAULT_HEADER_COLOR,
   MAX_INPUT_LENGTH,
   MAX_LINE_COUNT,
+  createCopyPayload,
   createImagePromptPayload,
   formatArticles,
   normalizeWhitespace,
@@ -651,6 +652,89 @@ test("inline image prompts are separated without deleting ordinary text or fence
   assert.match(article.plainText, /코드 안 문구는 남습니다/);
   assert.match(article.plainText, /본문은 계속 남습니다/);
   assert.doesNotMatch(article.plainText, /푸른 하늘 아래 작은 흰색 집/);
+});
+
+test("ride articles always end with the Everland ride finder link", () => {
+  const article = formatArticles(`# 에버랜드 놀이기구 키 제한
+
+아이와 탈 수 있는 시설을 정리합니다.
+
+#에버랜드 #놀이기구`).articles[0];
+  const footer = `에버랜드 우리아이 놀이기구 찾기↓↓ 아래 링크 클릭
+https://onecalc.kr/calc/everland-ride-passport/`;
+
+  assert.ok(article.plainText.endsWith(footer));
+  assert.match(
+    article.html,
+    /에버랜드 우리아이 놀이기구 찾기↓↓ 아래 링크 클릭.*<a href="https:\/\/onecalc\.kr\/calc\/everland-ride-passport\/"/s,
+  );
+});
+
+test("ride finder footer is not added to ordinary posts or duplicated", () => {
+  const ordinary = formatArticles(`# 아침 식사
+
+간단한 메뉴를 소개합니다.`).articles[0];
+  assert.doesNotMatch(ordinary.plainText, /everland-ride-passport/);
+
+  const existing = formatArticles(`# 에버랜드 놀이 기구 안내
+
+본문입니다.
+
+에버랜드 우리아이 놀이기구 찾기↓↓ 아래 링크 클릭
+https://onecalc.kr/calc/everland-ride-passport/`).articles[0];
+  assert.equal((existing.plainText.match(/everland-ride-passport/g) ?? []).length, 1);
+  assert.equal((existing.html.match(/href="https:\/\/onecalc\.kr\/calc\/everland-ride-passport\/"/g) ?? []).length, 1);
+  assert.ok(existing.plainText.endsWith("https://onecalc.kr/calc/everland-ride-passport/"));
+});
+
+test("ride detection allows horizontal spacing but ignores separate words and code", () => {
+  const spaced = formatArticles(`# 가족 나들이
+
+아이에게 맞는 놀이   기구를 찾아봅니다.`).articles[0];
+  assert.match(spaced.plainText, /everland-ride-passport/);
+
+  const nearMiss = formatArticles(`# 교육 활동
+
+놀이와 기구의 차이를 설명합니다.
+
+놀이
+기구를 따로 준비합니다.
+
+\`\`\`txt
+놀이기구
+\`\`\``).articles[0];
+  assert.doesNotMatch(nearMiss.plainText, /everland-ride-passport/);
+});
+
+test("ride footer follows a title edited after formatting", () => {
+  const original = formatArticles(`# 가족 나들이
+
+준비물을 정리합니다.`).articles[0];
+  assert.doesNotMatch(original.plainText, /everland-ride-passport/);
+
+  const added = renderArticle({ ...original, title: "에버랜드 놀이기구 안내" });
+  assert.match(added.plainText, /everland-ride-passport/);
+
+  const titleOnlyRide = formatArticles(`# 놀이기구 안내
+
+본문에는 관련 단어가 없습니다.`).articles[0];
+  const removed = renderArticle({ ...titleOnlyRide, title: "가족 나들이 안내" });
+  assert.doesNotMatch(removed.plainText, /everland-ride-passport/);
+});
+
+test("copy payload helpers include titles on request and stay empty without an image prompt", () => {
+  const article = formatArticles(`# 복사 점검
+
+본문입니다.`).articles[0];
+  assert.deepEqual(createCopyPayload(article), {
+    html: article.html,
+    plainText: article.plainText,
+  });
+  const titled = createCopyPayload(article, true);
+
+  assert.match(titled.html, /^<h1[^>]*>복사 점검<\/h1>/);
+  assert.equal(titled.plainText, "복사 점검\n\n본문입니다.");
+  assert.deepEqual(createImagePromptPayload(article), { html: "", plainText: "" });
 });
 
 test("numbered question lists remain lists unless followed by an A summary", () => {
