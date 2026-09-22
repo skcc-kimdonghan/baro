@@ -6,6 +6,7 @@ import {
   DEFAULT_HEADER_COLOR,
   MAX_INPUT_LENGTH,
   MAX_LINE_COUNT,
+  createImagePromptPayload,
   formatArticles,
   normalizeWhitespace,
   renderArticle,
@@ -579,6 +580,77 @@ A: 두 번째 답변입니다.
   assert.match(rendered.html, /<strong>그래서, 직접 해볼 만할까요\?<\/strong>/);
   assert.equal((rendered.html.match(/<hr /g) ?? []).length, 3);
   assert.doesNotMatch(rendered.html, /<h2[^>]*>1\. 첫 번째 질문/);
+});
+
+test("only the opening question line is italicized", () => {
+  const article = formatArticles(`# 첫 질문 기울임
+
+“처음부터 가볍게 시작할 수 있을까요?”
+바로 다음 줄은 일반 문장입니다.
+
+두 번째 질문도 가능한가요?`).articles[0];
+
+  assert.match(article.html, /<em[^>]*>“처음부터 가볍게 시작할 수 있을까요\?”<\/em><br>바로 다음 줄은 일반 문장입니다\./);
+  assert.equal((article.html.match(/<em\b/g) ?? []).length, 1);
+
+  const statementFirst = formatArticles(`# 평서문 시작
+
+처음에는 일반 문장으로 시작합니다.
+
+뒤에서 질문해도 될까요?`).articles[0];
+  assert.doesNotMatch(statementFirst.html, /<em\b/);
+});
+
+test("image generation sections are removed from the body and copied separately", () => {
+  const article = formatArticles(`# 이미지 분리
+
+본문 첫 문장입니다.
+
+## 이미지 생성 프롬프트
+
+따뜻한 햇살이 드는 거실, 인물 없음
+세로형 4:5, 자연스러운 사진 스타일
+
+## 마무리
+
+본문 마지막 문장입니다.`).articles[0];
+
+  assert.equal(
+    article.imagePrompt,
+    "따뜻한 햇살이 드는 거실, 인물 없음\n세로형 4:5, 자연스러운 사진 스타일",
+  );
+  assert.doesNotMatch(article.plainText, /이미지 생성 프롬프트|따뜻한 햇살/);
+  assert.match(article.plainText, /본문 첫 문장입니다/);
+  assert.match(article.plainText, /마무리\n\n본문 마지막 문장입니다/);
+
+  const payload = createImagePromptPayload(article);
+  assert.equal(
+    payload.plainText,
+    "아래 이미지를 생성해주세요\n\n따뜻한 햇살이 드는 거실, 인물 없음\n세로형 4:5, 자연스러운 사진 스타일",
+  );
+  assert.match(payload.html, /아래 이미지를 생성해주세요/);
+});
+
+test("inline image prompts are separated without deleting ordinary text or fenced code", () => {
+  const article = formatArticles(`# 이미지 경계
+
+이미지를 생성하는 방법을 본문에서 설명합니다.
+
+\`\`\`md
+## 이미지 생성 프롬프트
+코드 안 문구는 남습니다.
+\`\`\`
+
+이미지 생성 프롬프트: 푸른 하늘 아래 작은 흰색 집, 가로형 16:9
+
+본문은 계속 남습니다.`).articles[0];
+
+  assert.equal(article.imagePrompt, "푸른 하늘 아래 작은 흰색 집, 가로형 16:9");
+  assert.match(article.plainText, /이미지를 생성하는 방법/);
+  assert.match(article.plainText, /## 이미지 생성 프롬프트/);
+  assert.match(article.plainText, /코드 안 문구는 남습니다/);
+  assert.match(article.plainText, /본문은 계속 남습니다/);
+  assert.doesNotMatch(article.plainText, /푸른 하늘 아래 작은 흰색 집/);
 });
 
 test("numbered question lists remain lists unless followed by an A summary", () => {

@@ -8,6 +8,7 @@ import {
   Clipboard,
   Copy,
   FileText,
+  ImagePlus,
   LockKeyhole,
   RotateCcw,
   ShieldCheck,
@@ -26,6 +27,7 @@ import {
   DEFAULT_HEADER_COLOR,
   MAX_INPUT_LENGTH,
   createCopyPayload,
+  createImagePromptPayload,
   formatArticles,
   renderArticle,
 } from "@/lib/formatter.mjs";
@@ -37,6 +39,7 @@ type Article = {
   bodySource: string;
   html: string;
   plainText: string;
+  imagePrompt: string;
   tableCount: number;
   characterCount: number;
 };
@@ -101,6 +104,10 @@ A: 가장 부담 없는 행동부터 시작해 흐름을 만드는 편이 좋습
 세 가지를 모두 하기 어렵다면 물 한 잔부터 시작해도 충분합니다.
 
 #아침루틴 #생활습관 #시간관리
+
+## 이미지 생성 프롬프트
+
+아침 햇살이 들어오는 정돈된 주방, 물 한 잔과 작은 메모장, 인물 없음, 세로형 4:5
 
 ---
 
@@ -188,18 +195,22 @@ export default function Home() {
 
   const handleCopy = async (
     article: Article,
-    action: "title" | "plain" | "rich",
+    action: "title" | "plain" | "rich" | "image",
   ) => {
     const payload =
       action === "title"
         ? { html: article.title, plainText: article.title }
-        : createCopyPayload(article, false);
+        : action === "image"
+          ? createImagePromptPayload(article)
+          : createCopyPayload(article, false);
 
     try {
       const copied = await copyArticle(payload, action === "rich" ? "rich" : "plain");
       const message =
         action === "title"
           ? "제목을 복사했습니다."
+          : action === "image"
+            ? "이미지 생성 요청을 복사했습니다."
           : copied.mode === "plain-fallback" || (action === "rich" && copied.mode !== "rich")
             ? "서식 복사가 제한되어 안전한 텍스트로 복사했습니다."
             : action === "rich"
@@ -313,7 +324,7 @@ export default function Home() {
           </div>
           <p className="max-w-xl text-sm leading-6 text-[var(--muted-ink)] lg:text-right">
             질문형 소제목, A: 핵심 답변, 구분선과 회색 표 제목행을 기준 글 양식에 맞춰 정리합니다.
-            제목과 본문은 글별로 따로 복사할 수 있어요.
+            제목·본문·이미지 생성 요청을 글별로 따로 복사할 수 있어요.
           </p>
         </section>
 
@@ -402,7 +413,7 @@ export default function Home() {
                 <span className="step-number">2</span>
                 <div>
                   <h2 id="result-title" className="font-bold tracking-[-0.02em]">글별 확인·복사</h2>
-                  <p className="text-xs text-[var(--muted-ink)]">제목과 본문을 순서대로 복사하세요</p>
+                  <p className="text-xs text-[var(--muted-ink)]">제목·본문·이미지 요청을 필요한 순서대로 복사하세요</p>
                 </div>
               </div>
               {result && (
@@ -505,6 +516,29 @@ export default function Home() {
                               <ChevronDown className={`size-5 transition-transform ${isExpanded ? "rotate-180" : ""}`} aria-hidden="true" />
                             </Button>
                           </div>
+
+                          {article.imagePrompt && (
+                            <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50/70 p-3.5">
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                <p className="flex items-center gap-2 text-sm font-bold text-sky-950">
+                                  <ImagePlus className="size-4 text-sky-700" aria-hidden="true" />
+                                  아래 이미지를 생성해주세요
+                                </p>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-sky-200 bg-white text-sky-900 hover:bg-sky-100"
+                                  onClick={() => void handleCopy(article, "image")}
+                                >
+                                  <Copy className="size-3.5" aria-hidden="true" /> 이미지 요청 복사
+                                </Button>
+                              </div>
+                              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                                {article.imagePrompt}
+                              </p>
+                            </div>
+                          )}
 
                           <p className="sr-only" role="status" aria-live="polite">
                             {copyStatus[article.id] ?? ""}
