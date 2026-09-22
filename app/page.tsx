@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -26,10 +26,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Toaster } from "@/components/ui/sonner";
-import {
-  MAX_COMPARISON_LENGTH,
-  comparePublishedArticle,
-} from "@/lib/article-comparison.mjs";
+import { PublicationHistoryPanel } from "@/components/publication-history-panel";
+import { usePublicationHistory } from "@/hooks/use-publication-history";
+import { MAX_COMPARISON_LENGTH, comparePublishedArticle } from "@/lib/article-comparison.mjs";
 import { copyArticle } from "@/lib/clipboard.mjs";
 import {
   DEFAULT_HEADER_COLOR,
@@ -60,13 +59,7 @@ type FormatResult = {
 };
 
 type CopyStatus = Record<string, string>;
-
-type ComparisonIssue = {
-  type: "missing" | "added" | "formatting" | "order" | "ride-footer";
-  title: string;
-  detail: string;
-  samples: readonly string[];
-};
+type ComparisonIssue = { type: "missing" | "added" | "formatting" | "order" | "ride-footer"; title: string; detail: string; samples: readonly string[] };
 
 type ComparisonResult = {
   status: "match" | "formatting-only" | "different";
@@ -82,6 +75,7 @@ type PublicationReview = {
   publishedText: string;
   comparison: ComparisonResult | null;
   error: string;
+  historyId: string | null;
 };
 
 type PublicationReviews = Record<string, PublicationReview>;
@@ -172,6 +166,8 @@ export default function Home() {
   const [expandedIds, setExpandedIds] = useState<readonly string[]>([]);
   const [copyStatus, setCopyStatus] = useState<CopyStatus>({});
   const [publicationReviews, setPublicationReviews] = useState<PublicationReviews>({});
+  const publicationRevisionRef = useRef(0);
+  const history = usePublicationHistory();
 
   const totalCharacters = useMemo(
     () => result?.articles.reduce((sum, article) => sum + article.characterCount, 0) ?? 0,
@@ -179,6 +175,7 @@ export default function Home() {
   );
 
   const runFormat = useCallback((content: string, color: string) => {
+    publicationRevisionRef.current += 1;
     try {
       const nextResult = formatArticles(content, { headerColor: color }) as FormatResult;
       setResult(nextResult);
@@ -211,6 +208,7 @@ export default function Home() {
   };
 
   const handleReset = () => {
+    publicationRevisionRef.current += 1;
     setInput("");
     setResult(null);
     setError("");
@@ -221,6 +219,7 @@ export default function Home() {
 
   const handleTitleChange = (articleId: string, title: string) => {
     if (!result) return;
+    publicationRevisionRef.current += 1;
     setResult({
       ...result,
       articles: result.articles.map((article) => {
@@ -243,6 +242,7 @@ export default function Home() {
   };
 
   const handlePublishedChange = (articleId: string, completed: boolean) => {
+    publicationRevisionRef.current += 1;
     setPublicationReviews((current) => {
       const review = current[articleId];
       return {
@@ -252,12 +252,14 @@ export default function Home() {
           publishedText: review?.publishedText ?? "",
           comparison: completed ? review?.comparison ?? null : null,
           error: "",
+          historyId: review?.historyId ?? null,
         },
       };
     });
   };
 
   const handlePublishedTextChange = (articleId: string, publishedText: string) => {
+    publicationRevisionRef.current += 1;
     setPublicationReviews((current) => ({
       ...current,
       [articleId]: {
@@ -265,16 +267,28 @@ export default function Home() {
         publishedText,
         comparison: null,
         error: "",
+        historyId: current[articleId]?.historyId ?? null,
       },
     }));
   };
 
-  const handleComparePublished = (article: Article) => {
+  const handleComparePublished = async (article: Article) => {
     const review = publicationReviews[article.id];
+    const comparisonRevision = publicationRevisionRef.current;
     try {
       const comparison = comparePublishedArticle(article.plainText, review?.publishedText ?? "", {
         title: article.title,
       }) as ComparisonResult;
+      const saveResult = await history.saveComparison({
+        historyId: review?.historyId ?? null,
+        title: article.title,
+        preparedText: article.plainText,
+        publishedText: review?.publishedText ?? "",
+        comparison,
+        isCurrent: () => publicationRevisionRef.current === comparisonRevision,
+      });
+      if (saveResult.status === "stale" || publicationRevisionRef.current !== comparisonRevision) return;
+
       setPublicationReviews((current) => ({
         ...current,
         [article.id]: {
@@ -282,9 +296,9 @@ export default function Home() {
           publishedText: current[article.id]?.publishedText ?? "",
           comparison,
           error: "",
+          historyId: saveResult.historyId,
         },
       }));
-      if (comparison.status === "match") toast.success("발행본과 제공 원고가 일치합니다.");
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "발행본을 비교하지 못했습니다.";
       setPublicationReviews((current) => ({
@@ -294,6 +308,7 @@ export default function Home() {
           publishedText: current[article.id]?.publishedText ?? "",
           comparison: null,
           error: message,
+          historyId: current[article.id]?.historyId ?? null,
         },
       }));
     }
@@ -450,6 +465,7 @@ export default function Home() {
                 size="sm"
                 className="text-emerald-800 hover:bg-emerald-50 hover:text-emerald-900"
                 onClick={() => {
+                  publicationRevisionRef.current += 1;
                   setInput(EXAMPLE_TEXT);
                   setResult(null);
                   setExpandedIds([]);
@@ -471,6 +487,7 @@ export default function Home() {
                   value={input}
                   maxLength={MAX_INPUT_LENGTH}
                   onChange={(event) => {
+                    publicationRevisionRef.current += 1;
                     setInput(event.target.value);
                     setResult(null);
                     setExpandedIds([]);
@@ -493,7 +510,7 @@ export default function Home() {
               ) : (
                 <p id="input-help" className="flex items-center gap-2 text-xs leading-5 text-[var(--muted-ink)]">
                   <ShieldCheck className="size-4 shrink-0 text-emerald-600" aria-hidden="true" />
-                  붙여넣은 내용은 서버로 전송하거나 저장하지 않습니다.
+                  정리 중에는 저장하지 않으며, 비교 완료 시 두 원고만 이 브라우저 히스토리에 저장합니다.
                 </p>
               )}
 
@@ -669,7 +686,7 @@ export default function Home() {
                                   발행 완료
                                 </label>
                                 <p className="mt-0.5 text-xs leading-5 text-[var(--muted-ink)]">
-                                  발행한 뒤 체크하면 실제 게시된 본문과 차이를 확인할 수 있어요.
+                                  발행한 뒤 체크하고 비교를 마치면 히스토리에 자동 저장돼요.
                                 </p>
                               </div>
                             </div>
@@ -682,7 +699,7 @@ export default function Home() {
                                       실제 발행한 글 붙여넣기
                                     </label>
                                     <p className="mt-0.5 text-xs leading-5 text-[var(--muted-ink)]">
-                                      네이버 게시글의 제목을 포함해도 됩니다. 메뉴·작성자 정보가 아닌 본문만 붙여넣어 주세요.
+                                      제목을 포함해도 됩니다. 비교 버튼을 누르면 제공 원고와 실제 발행본이 이 브라우저에 저장됩니다.
                                     </p>
                                   </div>
                                   <span className="text-xs tabular-nums text-[var(--muted-ink)]">
@@ -708,7 +725,7 @@ export default function Home() {
                                   type="button"
                                   className="mt-3 w-full rounded-xl bg-[#0d7a42] text-white hover:bg-[#096936] sm:w-auto"
                                   disabled={!review?.publishedText.trim()}
-                                  onClick={() => handleComparePublished(article)}
+                                  onClick={() => void handleComparePublished(article)}
                                 >
                                   <GitCompareArrows className="size-4" aria-hidden="true" />
                                   제공 원고와 비교하기
@@ -780,6 +797,14 @@ export default function Home() {
             )}
           </section>
         </section>
+
+        <PublicationHistoryPanel
+          entries={history.entries}
+          warning={history.warning}
+          onCopy={history.copy}
+          onDelete={history.remove}
+          onClear={history.clear}
+        />
       </div>
     </main>
   );
