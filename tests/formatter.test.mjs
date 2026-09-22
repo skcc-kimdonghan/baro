@@ -145,6 +145,114 @@ A: 둘째 답변입니다.`);
   assert.equal((result.articles[0].html.match(/<hr /g) ?? []).length, 2);
 });
 
+test("a unicode visual divider before a reference heading is removed without duplicating our divider", () => {
+  const result = formatArticles(`# 한 편의 글
+
+도입 문단입니다.
+
+────────────────────
+
+## 1. 첫 번째 질문인가요?
+
+A: 핵심 답변입니다.`);
+
+  assert.equal(result.articles.length, 1);
+  assert.doesNotMatch(result.articles[0].html, /─/);
+  assert.doesNotMatch(result.articles[0].plainText, /─/);
+  assert.equal((result.articles[0].html.match(/<hr /g) ?? []).length, 1);
+});
+
+test("a standalone unicode visual divider becomes our divider while inline marks remain", () => {
+  const result = formatArticles(`# 구분선 정리
+
+첫 문단입니다.
+
+────────────────────
+
+문장 안의 ─ 표시는 유지합니다.`);
+
+  assert.equal((result.articles[0].html.match(/<hr /g) ?? []).length, 1);
+  assert.doesNotMatch(result.articles[0].html, /────────────────────/);
+  assert.match(result.articles[0].plainText, /문장 안의 ─ 표시는 유지합니다\./);
+});
+
+test("a unicode visual divider inside fenced code remains code", () => {
+  const result = formatArticles(`# 코드 예시
+
+\`\`\`text
+────────────────────
+\`\`\``);
+
+  assert.match(result.articles[0].html, /<code[^>]*>────────────────────<\/code>/);
+  assert.equal((result.articles[0].html.match(/<hr /g) ?? []).length, 0);
+});
+
+test("consecutive markdown and unicode dividers before a reference heading stay in one article", () => {
+  const result = formatArticles(`# 혼합 구분선
+
+도입 문단입니다.
+
+---
+
+────────────────────
+
+## 1. 질문인가요?
+
+A: 답변입니다.`);
+
+  assert.equal(result.method, "single");
+  assert.equal(result.articles.length, 1);
+  assert.equal((result.articles[0].html.match(/<hr /g) ?? []).length, 1);
+});
+
+test("consecutive unicode and markdown divider variants collapse to one standard divider", () => {
+  const result = formatArticles(`# 연속 구분선
+
+첫 문단입니다.
+
+─━═⎯—–
+
+---
+
+━━━━━━━━━━
+
+## 1. 다음 질문인가요?
+
+A: 답변입니다.`);
+
+  assert.equal(result.method, "single");
+  assert.equal(result.articles.length, 1);
+  assert.equal((result.articles[0].html.match(/<hr /g) ?? []).length, 1);
+  assert.doesNotMatch(result.articles[0].html, /[─━═⎯—–]/);
+});
+
+test("an adjacent mixed divider run preserves an article boundary", () => {
+  const result = splitArticles(`# 첫 글
+
+첫 본문입니다.
+
+---
+────────────────────
+
+둘째 글 본문입니다.`);
+
+  assert.equal(result.method, "divider");
+  assert.equal(result.articles.length, 2);
+  assert.match(result.articles[1].source, /둘째 글 본문입니다/);
+});
+
+test("a visual divider before the H1 is discarded with the leading title", () => {
+  const result = formatArticles(`────────────────────
+
+# 실제 제목
+
+본문입니다.`);
+
+  assert.equal(result.articles[0].title, "실제 제목");
+  assert.doesNotMatch(result.articles[0].html, /실제 제목|<hr /);
+  assert.match(result.articles[0].html, /본문입니다/);
+});
+
 test("an explicit divider before a generic H2 still separates articles", () => {
   const result = splitArticles(`# 첫 글
 
