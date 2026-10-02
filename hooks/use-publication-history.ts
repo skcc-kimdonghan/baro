@@ -4,15 +4,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import type { PublicationHistoryEntry } from "@/components/publication-history-panel";
+import {
+  getBrowserLocalDataStore,
+  notifyLocalDataChanged,
+  subscribeToLocalDataChanges,
+} from "@/lib/browser-local-data.mjs";
 import { copyArticle } from "@/lib/clipboard.mjs";
 import {
-  HISTORY_STORAGE_KEY,
-  clearPublicationHistory,
-  loadPublicationHistory,
+  createHistoryEntry,
+  createHistoryIdFromContent,
   removeHistoryEntry,
-  savePublicationHistory,
+  upsertHistoryEntry,
 } from "@/lib/publication-history.mjs";
-import { savePublicationComparison } from "@/lib/publication-history-save.mjs";
+import {
+  isCurrentRequestGeneration,
+  shouldReportRequestFailure,
+} from "@/lib/request-generation.mjs";
 
 type ComparisonResult = NonNullable<PublicationHistoryEntry["comparison"]>;
 
@@ -25,73 +32,115 @@ type SaveHistoryInput = {
   isCurrent?: () => boolean;
 };
 
-const HISTORY_LOCK_NAME = "naver-blog-finalizer-publication-history";
-
-async function withHistoryLock<Result>(operation: () => Result | Promise<Result>) {
-  if (globalThis.navigator?.locks?.request) {
-    return globalThis.navigator.locks.request(HISTORY_LOCK_NAME, { mode: "exclusive" }, operation);
-  }
-  throw new Error("이 브라우저에서는 안전한 발행 히스토리 저장을 지원하지 않습니다.");
-}
-
 export function usePublicationHistory() {
   const [entries, setEntries] = useState<readonly PublicationHistoryEntry[]>([]);
   const entriesRef = useRef(entries);
+  const requestRevisionRef = useRef(0);
   const [warning, setWarning] = useState("");
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback(async () => {
+    const requestRevision = ++requestRevisionRef.current;
     try {
-      const loaded = loadPublicationHistory(window.localStorage) as {
+      const store = getBrowserLocalDataStore();
+      const migration = await store.prepare();
+      const loaded = await store.read("publicationHistory") as {
         entries: readonly PublicationHistoryEntry[];
-        warning: string;
       };
-      entriesRef.current = loaded.entries;
-      setEntries(loaded.entries);
-      setWarning(loaded.warning);
+      if (requestRevision === requestRevisionRef.current) {
+        entriesRef.current = loaded.entries;
+        setEntries(loaded.entries);
+        setWarning(migration.warning ?? "");
+      }
     } catch (caughtError) {
-      setWarning(caughtError instanceof Error ? caughtError.message : "발행 히스토리를 불러오지 못했습니다.");
+      if (requestRevision === requestRevisionRef.current) {
+        setWarning(caughtError instanceof Error ? caughtError.message : "로컬 DB의 발행 히스토리를 불러오지 못했습니다.");
+      }
     }
   }, []);
 
   useEffect(() => {
-    const initialRefresh = window.setTimeout(refresh, 0);
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === HISTORY_STORAGE_KEY) refresh();
-    };
-    window.addEventListener("storage", handleStorage);
+    const initialRefresh = window.setTimeout(() => void refresh(), 0);
+    const unsubscribe = subscribeToLocalDataChanges("publicationHistory", () => void refresh());
     return () => {
       window.clearTimeout(initialRefresh);
-      window.removeEventListener("storage", handleStorage);
+      unsubscribe();
     };
   }, [refresh]);
 
   const saveComparison = useCallback(async (input: SaveHistoryInput) => {
-    const result = await savePublicationComparison({
-      storage: window.localStorage,
-      withLock: withHistoryLock,
-      ...input,
-    }) as
-      | { status: "saved"; historyId: string; entries: readonly PublicationHistoryEntry[] }
-      | { status: "stale"; historyId: null }
-      | { status: "failed"; historyId: string | null; error: unknown };
-
-    if (result.status === "stale") return result;
-    if (result.status === "saved") {
-      entriesRef.current = result.entries;
-      setEntries(result.entries);
-      setWarning("");
-      toast.success(
-        input.comparison.status === "match"
-          ? "발행본이 일치하며 히스토리에 저장했습니다."
-          : "비교 결과를 발행 히스토리에 저장했습니다.",
-      );
-      return result;
+    const mutationRevision = ++requestRevisionRef.current;
+    if (input.isCurrent && !input.isCurrent()) {
+      return { status: "stale", historyId: null } as const;
     }
-
-    setWarning(result.error instanceof Error ? result.error.message : "발행 히스토리에 저장하지 못했습니다.");
-    toast.error("비교는 완료했지만 히스토리에 저장하지 못했습니다.");
-    return result;
-  }, []);
+    const previousHistoryId = input.historyId;
+    const historyId = previousHistoryId ?? createHistoryIdFromContent(input.title, input.preparedText);
+    const timestamp = new Date().toISOString();
+    let previousEntry: PublicationHistoryEntry | null = null;
+    try {
+      const store = getBrowserLocalDataStore();
+      const saved = await store.mutate(
+        "publicationHistory",
+        (persisted: readonly PublicationHistoryEntry[]) => {
+          if (input.isCurrent && !input.isCurrent()) {
+            throw Object.assign(new Error("오래된 비교 요청입니다."), { code: "STALE_PUBLICATION_COMPARISON" });
+          }
+          const existing = persisted.find((entry) => entry.id === historyId);
+          previousEntry = existing ?? null;
+          const entry = createHistoryEntry({
+            id: historyId,
+            title: input.title,
+            preparedText: input.preparedText,
+            publishedText: input.publishedText,
+            comparison: input.comparison,
+            completedAt: existing?.completedAt ?? timestamp,
+            updatedAt: timestamp,
+          });
+          return upsertHistoryEntry(persisted, entry);
+        },
+      ) as { entries: readonly PublicationHistoryEntry[] };
+      if (input.isCurrent && !input.isCurrent()) {
+        await store.mutate(
+          "publicationHistory",
+          (persisted: readonly PublicationHistoryEntry[]) => {
+            const written = persisted.find((entry) => entry.id === historyId);
+            if (written?.updatedAt !== timestamp) return persisted;
+            if (previousEntry) return upsertHistoryEntry(removeHistoryEntry(persisted, historyId), previousEntry);
+            return removeHistoryEntry(persisted, historyId);
+          },
+        );
+        notifyLocalDataChanged("publicationHistory");
+        return { status: "stale", historyId: null } as const;
+      }
+      if (!saved.entries.some((entry) => entry.id === historyId)) {
+        throw new Error("새 비교 기록이 DB 저장 한도에 포함되지 않았습니다.");
+      }
+      if (isCurrentRequestGeneration(mutationRevision, requestRevisionRef.current)) {
+        entriesRef.current = saved.entries;
+        setEntries(saved.entries);
+        setWarning("");
+      } else {
+        void refresh();
+      }
+      notifyLocalDataChanged("publicationHistory");
+      toast.success(
+        input.comparison.status === "match" && input.comparison.formatting?.status === "match"
+          ? "내용과 서식이 일치하며 로컬 DB에 저장했습니다."
+          : "내용·서식 비교 결과를 로컬 DB 히스토리에 저장했습니다.",
+      );
+      return { status: "saved", historyId, entries: saved.entries } as const;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "STALE_PUBLICATION_COMPARISON") {
+        return { status: "stale", historyId: null } as const;
+      }
+      if (shouldReportRequestFailure(mutationRevision, requestRevisionRef.current)) {
+        setWarning(error instanceof Error ? error.message : "발행 히스토리에 저장하지 못했습니다.");
+        toast.error("비교는 완료했지만 로컬 DB 히스토리에 저장하지 못했습니다.");
+      } else {
+        void refresh();
+      }
+      return { status: "failed", historyId: previousHistoryId, error } as const;
+    }
+  }, [refresh]);
 
   const copy = useCallback(async (text: string, label: string) => {
     try {
@@ -103,38 +152,59 @@ export function usePublicationHistory() {
   }, []);
 
   const remove = useCallback(async (entryId: string) => {
+    const mutationRevision = ++requestRevisionRef.current;
     try {
-      const savedEntries = await withHistoryLock(() => {
-        const persisted = loadPublicationHistory(window.localStorage).entries as readonly PublicationHistoryEntry[];
-        const nextEntries = removeHistoryEntry(persisted, entryId) as readonly PublicationHistoryEntry[];
-        return savePublicationHistory(window.localStorage, nextEntries) as readonly PublicationHistoryEntry[];
-      });
-      entriesRef.current = savedEntries;
-      setEntries(savedEntries);
-      setWarning("");
+      const saved = await getBrowserLocalDataStore().mutate(
+        "publicationHistory",
+        (persisted: readonly PublicationHistoryEntry[]) => removeHistoryEntry(persisted, entryId),
+      ) as { entries: readonly PublicationHistoryEntry[] };
+      const savedEntries = saved.entries;
+      if (isCurrentRequestGeneration(mutationRevision, requestRevisionRef.current)) {
+        entriesRef.current = savedEntries;
+        setEntries(savedEntries);
+        setWarning("");
+      } else {
+        void refresh();
+      }
+      notifyLocalDataChanged("publicationHistory");
       toast.success("발행 기록을 삭제했습니다.");
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "발행 기록을 삭제하지 못했습니다.";
-      setWarning(message);
-      toast.error(message);
+      if (shouldReportRequestFailure(mutationRevision, requestRevisionRef.current)) {
+        setWarning(message);
+        toast.error(message);
+      } else {
+        void refresh();
+      }
     }
-  }, []);
+  }, [refresh]);
 
   const clear = useCallback(async () => {
+    const mutationRevision = ++requestRevisionRef.current;
     try {
-      const cleared = await withHistoryLock(
-        () => clearPublicationHistory(window.localStorage) as readonly PublicationHistoryEntry[],
-      );
-      entriesRef.current = cleared;
-      setEntries(cleared);
-      setWarning("");
+      const saved = await getBrowserLocalDataStore().mutate("publicationHistory", () => []) as {
+        entries: readonly PublicationHistoryEntry[];
+      };
+      const cleared = saved.entries;
+      if (isCurrentRequestGeneration(mutationRevision, requestRevisionRef.current)) {
+        entriesRef.current = cleared;
+        setEntries(cleared);
+        setWarning("");
+      } else {
+        void refresh();
+      }
+      notifyLocalDataChanged("publicationHistory");
       toast.success("발행 히스토리를 모두 삭제했습니다.");
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "발행 히스토리를 삭제하지 못했습니다.";
-      setWarning(message);
-      toast.error(message);
+      if (shouldReportRequestFailure(mutationRevision, requestRevisionRef.current)) {
+        setWarning(message);
+        toast.error(message);
+      } else {
+        void refresh();
+      }
     }
-  }, []);
+  }, [refresh]);
 
   return { entries, warning, saveComparison, copy, remove, clear } as const;
 }

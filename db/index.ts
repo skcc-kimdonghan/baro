@@ -11,3 +11,10 @@ export function getDb() {
 
   return drizzle(env.DB, { schema });
 }
+
+export function getD1Database() {
+  if (!env.DB) {
+    throw new Error("Local D1 binding `DB` is unavailable.");
+  }
+  return env.DB;
+}

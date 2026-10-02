@@ -1,7 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { composePastedValue, shouldAutoFormatPaste } from "../lib/paste-workflow.mjs";
+import {
+  composePastedValue,
+  createTopScrollOptions,
+  shouldAutoFormatPaste,
+} from "../lib/paste-workflow.mjs";
+
+test("formatted results return the page to the top and respect reduced motion", () => {
+  assert.deepEqual(createTopScrollOptions(false), {
+    top: 0,
+    left: 0,
+    behavior: "smooth",
+  });
+  assert.deepEqual(createTopScrollOptions(true), {
+    top: 0,
+    left: 0,
+    behavior: "auto",
+  });
+});
 
 test("pasted article bundles replace the current selection without losing surrounding text", () => {
   const result = composePastedValue({

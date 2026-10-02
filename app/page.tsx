@@ -5,18 +5,16 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
-  CircleCheckBig,
   Clipboard,
   Copy,
   FileText,
-  GitCompareArrows,
   ImagePlus,
   LockKeyhole,
   RotateCcw,
+  Save,
   ShieldCheck,
   Sparkles,
   Table2,
-  TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,11 +24,21 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Toaster } from "@/components/ui/sonner";
+import { ArticleBundlePanel } from "@/components/article-bundle-panel";
+import { GptShortcutsBar } from "@/components/gpt-shortcuts-bar";
+import { PublicationCompareDialog } from "@/components/publication-compare-dialog";
 import { PublicationHistoryPanel } from "@/components/publication-history-panel";
+import { type ArticleBundleEntry, useArticleBundles } from "@/hooks/use-article-bundles";
+import { useGptShortcuts } from "@/hooks/use-gpt-shortcuts";
 import { usePublicationHistory } from "@/hooks/use-publication-history";
 import { MAX_COMPARISON_LENGTH, comparePublishedArticle } from "@/lib/article-comparison.mjs";
 import { copyArticle } from "@/lib/clipboard.mjs";
-import { composePastedValue, shouldAutoFormatPaste } from "@/lib/paste-workflow.mjs";
+import { applyPublicationTextEdit, createPublicationPasteState } from "@/lib/publication-paste.mjs";
+import {
+  composePastedValue,
+  createTopScrollOptions,
+  shouldAutoFormatPaste,
+} from "@/lib/paste-workflow.mjs";
 import {
   DEFAULT_HEADER_COLOR,
   MAX_INPUT_LENGTH,
@@ -39,6 +47,7 @@ import {
   formatArticles,
   renderArticle,
 } from "@/lib/formatter.mjs";
+import { inputPanelView, RESULT_LIST_CLASS, RESULT_WORKSPACE_CLASS } from "@/lib/workspace-panel.mjs";
 
 type Article = {
   id: string;
@@ -50,6 +59,9 @@ type Article = {
   imagePrompt: string;
   tableCount: number;
   characterCount: number;
+  engagementCtaAdded: boolean;
+  engagementCtaParts: readonly string[];
+  engagementCtaTopic: string;
 };
 
 type FormatResult = {
@@ -69,11 +81,25 @@ type ComparisonResult = {
   issues: readonly ComparisonIssue[];
   expectedCharacters: number;
   actualCharacters: number;
+  formatting?: {
+    status: "match" | "different" | "unavailable";
+    score: number | null;
+    summary: string;
+    checks: readonly {
+      key: string;
+      label: string;
+      expected: string;
+      actual: string;
+      matched: boolean;
+    }[];
+  };
 };
 
 type PublicationReview = {
   completed: boolean;
   publishedText: string;
+  publishedHtml: string;
+  captureMode: "rich-html" | "text-only";
   comparison: ComparisonResult | null;
   error: string;
   historyId: string | null;
@@ -165,23 +191,33 @@ export default function Home() {
   const [result, setResult] = useState<FormatResult | null>(null);
   const [error, setError] = useState("");
   const [expandedIds, setExpandedIds] = useState<readonly string[]>([]);
+  const [isInputPanelExpanded, setIsInputPanelExpanded] = useState(false);
   const [copyStatus, setCopyStatus] = useState<CopyStatus>({});
   const [publicationReviews, setPublicationReviews] = useState<PublicationReviews>({});
   const publicationRevisionRef = useRef(0);
-  const resultSectionRef = useRef<HTMLElement | null>(null);
+  const pageTopRef = useRef<HTMLElement | null>(null);
+  const bundles = useArticleBundles();
+  const gptShortcuts = useGptShortcuts();
   const history = usePublicationHistory();
 
   const totalCharacters = useMemo(
     () => result?.articles.reduce((sum, article) => sum + article.characterCount, 0) ?? 0,
     [result],
   );
+  const currentArticleTitles = useMemo(
+    () => result?.articles.map((article) => article.title) ?? null,
+    [result],
+  );
+  const hasPublicationWork = Object.keys(publicationReviews).length > 0;
+  const inputPanel = inputPanelView(isInputPanelExpanded);
 
   const runFormat = useCallback((content: string, color: string) => {
     publicationRevisionRef.current += 1;
     try {
       const nextResult = formatArticles(content, { headerColor: color }) as FormatResult;
       setResult(nextResult);
-      setExpandedIds(nextResult.articles.length === 1 ? [nextResult.articles[0].id] : []);
+      setIsInputPanelExpanded(false);
+      setExpandedIds([]);
       setCopyStatus({});
       setPublicationReviews({});
       setError("");
@@ -196,11 +232,9 @@ export default function Home() {
 
   const revealResults = useCallback(() => {
     window.requestAnimationFrame(() => {
-      const section = resultSectionRef.current;
-      if (!section) return;
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      section.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
-      section.focus({ preventScroll: true });
+      window.scrollTo(createTopScrollOptions(reduceMotion));
+      pageTopRef.current?.focus({ preventScroll: true });
     });
   }, []);
 
@@ -238,6 +272,37 @@ export default function Home() {
     if (nextResult) toast.success(`${nextResult.articles.length}편으로 자동 정리했습니다.`);
   }, [handleFormatAndReveal]);
 
+  const handleSaveBundle = useCallback(async () => {
+    const currentResult = result ?? handleFormatAndReveal(input);
+    if (!currentResult) return;
+    await bundles.save({
+      sourceText: input,
+      headerColor,
+      articleTitles: currentResult.articles.map((article) => article.title),
+    });
+  }, [bundles, handleFormatAndReveal, headerColor, input, result]);
+
+  const handleOpenBundle = useCallback((entry: ArticleBundleEntry) => {
+    publicationRevisionRef.current += 1;
+    setHeaderColor(entry.headerColor);
+    setInput(entry.sourceText);
+    const formatted = runFormat(entry.sourceText, entry.headerColor);
+    if (!formatted) return;
+
+    const canRestoreTitles = formatted.articles.length === entry.articleTitles.length;
+    const articles = canRestoreTitles
+      ? formatted.articles.map((article, index) => {
+          const titledArticle = { ...article, title: entry.articleTitles[index] };
+          const rendered = renderArticle(titledArticle, { headerColor: entry.headerColor });
+          return { ...titledArticle, ...rendered, characterCount: rendered.plainText.length };
+        })
+      : formatted.articles;
+    setResult({ ...formatted, articles });
+    setExpandedIds(articles.length === 1 ? [articles[0].id] : []);
+    revealResults();
+    toast.success(canRestoreTitles ? "저장한 글뭉치를 다시 열었습니다." : "원고를 다시 열었지만 글 구성이 달라 제목은 새로 정리했습니다.");
+  }, [revealResults, runFormat]);
+
   const handleColorChange = (color: string) => {
     setHeaderColor(color);
     if (!result) return;
@@ -261,6 +326,7 @@ export default function Home() {
     setExpandedIds([]);
     setCopyStatus({});
     setPublicationReviews({});
+    setIsInputPanelExpanded(false);
   };
 
   const handleTitleChange = (articleId: string, title: string) => {
@@ -296,6 +362,8 @@ export default function Home() {
         [articleId]: {
           completed,
           publishedText: review?.publishedText ?? "",
+          publishedHtml: review?.publishedHtml ?? "",
+          captureMode: review?.captureMode ?? "text-only",
           comparison: completed ? review?.comparison ?? null : null,
           error: "",
           historyId: review?.historyId ?? null,
@@ -306,11 +374,73 @@ export default function Home() {
 
   const handlePublishedTextChange = (articleId: string, publishedText: string) => {
     publicationRevisionRef.current += 1;
+    setPublicationReviews((current) => {
+      const review = current[articleId] ?? {
+        completed: true,
+        publishedText: "",
+        publishedHtml: "",
+        captureMode: "text-only" as const,
+        comparison: null,
+        error: "",
+        historyId: null,
+      };
+      const edited = applyPublicationTextEdit(review, publishedText) as Pick<
+        PublicationReview,
+        "publishedText" | "publishedHtml" | "captureMode"
+      >;
+      return {
+        ...current,
+        [articleId]: {
+          ...review,
+          ...edited,
+          completed: true,
+          comparison: null,
+          error: "",
+        },
+      };
+    });
+  };
+
+  const handlePublishedPaste = (
+    articleId: string,
+    event: ReactClipboardEvent<HTMLTextAreaElement>,
+  ) => {
+    const plainText = event.clipboardData.getData("text/plain");
+    if (!plainText) return;
+    event.preventDefault();
+    const target = event.currentTarget;
+    let pasted: Pick<PublicationReview, "publishedText" | "publishedHtml" | "captureMode">;
+    try {
+      pasted = createPublicationPasteState({
+        currentText: target.value,
+        selectionStart: target.selectionStart,
+        selectionEnd: target.selectionEnd,
+        plainText,
+        htmlText: event.clipboardData.getData("text/html"),
+      }) as Pick<PublicationReview, "publishedText" | "publishedHtml" | "captureMode">;
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "발행본을 붙여넣지 못했습니다.";
+      setPublicationReviews((current) => ({
+        ...current,
+        [articleId]: {
+          completed: true,
+          publishedText: current[articleId]?.publishedText ?? target.value,
+          publishedHtml: current[articleId]?.publishedHtml ?? "",
+          captureMode: current[articleId]?.captureMode ?? "text-only",
+          comparison: current[articleId]?.comparison ?? null,
+          error: message,
+          historyId: current[articleId]?.historyId ?? null,
+        },
+      }));
+      return;
+    }
+
+    publicationRevisionRef.current += 1;
     setPublicationReviews((current) => ({
       ...current,
       [articleId]: {
         completed: true,
-        publishedText,
+        ...pasted,
         comparison: null,
         error: "",
         historyId: current[articleId]?.historyId ?? null,
@@ -324,6 +454,8 @@ export default function Home() {
     try {
       const comparison = comparePublishedArticle(article.plainText, review?.publishedText ?? "", {
         title: article.title,
+        expectedHtml: createCopyPayload(article, false).html,
+        actualHtml: review?.publishedHtml ?? "",
       }) as ComparisonResult;
       const saveResult = await history.saveComparison({
         historyId: review?.historyId ?? null,
@@ -340,6 +472,8 @@ export default function Home() {
         [article.id]: {
           completed: true,
           publishedText: current[article.id]?.publishedText ?? "",
+          publishedHtml: current[article.id]?.publishedHtml ?? "",
+          captureMode: current[article.id]?.captureMode ?? "text-only",
           comparison,
           error: "",
           historyId: saveResult.historyId,
@@ -352,6 +486,8 @@ export default function Home() {
         [article.id]: {
           completed: true,
           publishedText: current[article.id]?.publishedText ?? "",
+          publishedHtml: current[article.id]?.publishedHtml ?? "",
+          captureMode: current[article.id]?.captureMode ?? "text-only",
           comparison: null,
           error: message,
           historyId: current[article.id]?.historyId ?? null,
@@ -459,7 +595,7 @@ export default function Home() {
   }, [headerColor, runFormat]);
 
   return (
-    <main className="min-h-screen bg-[var(--canvas)] text-[var(--ink)]">
+    <main ref={pageTopRef} tabIndex={-1} className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] outline-none">
       <Toaster position="top-center" />
 
       <header className="border-b border-[var(--line)] bg-white/90 backdrop-blur-xl">
@@ -475,9 +611,16 @@ export default function Home() {
           </div>
           <Badge className="border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-emerald-800" variant="outline">
             <LockKeyhole className="size-3.5" aria-hidden="true" />
-            글은 브라우저 밖으로 나가지 않아요
+            글은 이 컴퓨터 밖으로 나가지 않아요
           </Badge>
         </div>
+        <GptShortcutsBar
+          entries={gptShortcuts.entries}
+          warning={gptShortcuts.warning}
+          onAdd={gptShortcuts.add}
+          onUpdate={gptShortcuts.update}
+          onRemove={gptShortcuts.remove}
+        />
       </header>
 
       <div className="mx-auto max-w-[1500px] px-4 pt-6 pb-24 sm:px-6 lg:px-8 lg:py-8">
@@ -495,17 +638,28 @@ export default function Home() {
           </p>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(520px,1.05fr)]">
-          <Card className="gap-0 overflow-hidden rounded-[24px] border-[var(--line)] py-0 shadow-[0_18px_55px_rgba(24,46,35,0.07)]">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4 sm:px-6">
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(520px,1.05fr)] xl:items-start">
+          <Card className={`gap-0 overflow-hidden rounded-[24px] border-[var(--line)] py-0 shadow-[0_18px_55px_rgba(24,46,35,0.07)] ${inputPanel.panelClass}`}>
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4 sm:px-6">
               <div className="flex items-center gap-2.5">
                 <span className="step-number">1</span>
                 <div>
                   <h2 className="font-bold tracking-[-0.02em]">GPT 글 묶음 붙여넣기</h2>
-                  <p className="text-xs text-[var(--muted-ink)]">글 사이는 --- · 1편/2편 · # 큰 제목으로 자동 구분</p>
+                  <p className="text-xs text-[var(--muted-ink)]">글 사이는 --- · 1편/2편 · 1번 글/2번 글 · 주제명 1번/2번 · # 큰 제목으로 자동 구분</p>
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-expanded={inputPanel.expanded}
+                  aria-controls="input-panel-content"
+                  onClick={() => setIsInputPanelExpanded((current) => !current)}
+                >
+                  {inputPanel.toggleLabel}
+                  <ChevronDown className={`size-4 transition-transform ${inputPanel.expanded ? "rotate-180" : ""}`} aria-hidden="true" />
+                </Button>
                 <Button
                   type="button"
                   variant="ghost"
@@ -525,6 +679,16 @@ export default function Home() {
                 </Button>
                 <Button
                   type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!input.trim()}
+                  onClick={() => void handleSaveBundle()}
+                >
+                  <Save className="size-4" aria-hidden="true" />
+                  저장
+                </Button>
+                <Button
+                  type="button"
                   size="sm"
                   className="bg-[var(--brand)] text-white hover:bg-[#02b351]"
                   disabled={!input.trim()}
@@ -536,8 +700,8 @@ export default function Home() {
               </div>
             </div>
 
-            <CardContent className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
-              <div className="relative">
+            <CardContent id="input-panel-content" className="flex min-h-0 flex-1 flex-col space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+              <div className={`relative ${inputPanel.textareaWrapperClass}`}>
                 <Textarea
                   aria-label="정리할 블로그 원고"
                   aria-describedby={error ? "input-error" : "input-help"}
@@ -555,7 +719,7 @@ export default function Home() {
                     if (error) setError("");
                   }}
                   placeholder={`# 첫 번째 글 제목\n\n본문을 붙여넣으세요.\n\n---\n\n# 두 번째 글 제목\n\n다음 글을 이어서 붙여넣으세요.`}
-                  className="min-h-[390px] resize-y rounded-2xl border-slate-200 bg-[#fbfdfc] p-5 font-[family-name:var(--font-reading)] text-base leading-7 shadow-inner focus-visible:border-emerald-500 focus-visible:ring-emerald-100"
+                  className={`${inputPanel.textareaClass} rounded-2xl border-slate-200 bg-[#fbfdfc] p-5 font-[family-name:var(--font-reading)] text-base leading-7 shadow-inner focus-visible:border-emerald-500 focus-visible:ring-emerald-100`}
                 />
                 <span className="absolute bottom-3 right-4 rounded-md bg-white/90 px-2 py-1 text-xs tabular-nums text-[var(--muted-ink)] shadow-sm">
                   {input.length.toLocaleString("ko-KR")} / {MAX_INPUT_LENGTH.toLocaleString("ko-KR")}
@@ -569,7 +733,7 @@ export default function Home() {
               ) : (
                 <p id="input-help" className="flex items-center gap-2 text-xs leading-5 text-[var(--muted-ink)]">
                   <ShieldCheck className="size-4 shrink-0 text-emerald-600" aria-hidden="true" />
-                  붙여넣으면 자동으로 정리해 결과로 이동합니다. 작성 중 원고는 저장하지 않습니다.
+                  붙여넣으면 자동 정리됩니다. 저장한 원고는 로컬 DB에 남아 재시작 후에도 유지되므로 공용 계정에서는 사용 후 삭제하세요.
                 </p>
               )}
 
@@ -583,6 +747,10 @@ export default function Home() {
                   글별로 정리하기
                   <ArrowRight className="size-4.5" aria-hidden="true" />
                 </Button>
+                <Button type="button" variant="outline" className="h-12 rounded-xl px-5" onClick={() => void handleSaveBundle()} disabled={!input.trim()}>
+                  <Save className="size-4" aria-hidden="true" />
+                  글뭉치 저장
+                </Button>
                 <Button type="button" variant="outline" className="h-12 rounded-xl px-5" onClick={handleReset} disabled={!input && !result}>
                   <RotateCcw className="size-4" aria-hidden="true" />
                   초기화
@@ -591,8 +759,11 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <section ref={resultSectionRef} aria-labelledby="result-title" tabIndex={-1} className="min-w-0 scroll-mt-4 outline-none">
-            <div className="mb-3 flex min-h-10 flex-wrap items-center justify-between gap-3 px-1">
+          <section aria-labelledby="result-title" className={RESULT_WORKSPACE_CLASS}>
+            <p className="sr-only" role="status" aria-live="polite">
+              {result ? `${result.articles.length}편 정리가 완료되었습니다. 화면 맨 위로 이동했습니다.` : ""}
+            </p>
+            <div className="mb-3 flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-3 px-1">
               <div className="flex items-center gap-2.5">
                 <span className="step-number">2</span>
                 <div>
@@ -611,7 +782,7 @@ export default function Home() {
             </div>
 
             {!result ? (
-              <div className="grid min-h-[535px] place-items-center rounded-[24px] border border-dashed border-[#bfd6c9] bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(239,250,244,0.78))] p-8 text-center">
+              <div className="grid min-h-[535px] place-items-center rounded-[24px] border border-dashed border-[#bfd6c9] bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(239,250,244,0.78))] p-8 text-center xl:min-h-0 xl:flex-1">
                 <div className="max-w-sm">
                   <span className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl border border-emerald-100 bg-white text-emerald-600 shadow-[0_12px_30px_rgba(14,92,55,0.1)]">
                     <Clipboard className="size-7" aria-hidden="true" />
@@ -623,7 +794,7 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0 xl:gap-3">
                 <div className="flex flex-col gap-3 rounded-2xl border border-[#d8e7de] bg-[#f5fbf7] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-2 text-sm font-semibold text-[#26563e]">
                     <Check className="size-4" aria-hidden="true" />
@@ -657,7 +828,7 @@ export default function Home() {
                   </p>
                 ))}
 
-                <div className="max-h-[690px] space-y-3 overflow-y-auto pr-1 scrollbar-thin">
+                <div aria-label="정리된 글 목록" tabIndex={0} className={RESULT_LIST_CLASS}>
                   {result.articles.map((article, index) => {
                     const isExpanded = expandedIds.includes(article.id);
                     const review = publicationReviews[article.id];
@@ -685,6 +856,11 @@ export default function Home() {
                                 <span className="inline-flex items-center gap-1">
                                   <Table2 className="size-3.5" aria-hidden="true" /> 표 {article.tableCount}개
                                 </span>
+                                {article.engagementCtaAdded && (
+                                  <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-800">
+                                    반응 문구 자동 추가
+                                  </Badge>
+                                )}
                                 {isPublished && (
                                   <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800">
                                     발행 완료
@@ -732,105 +908,41 @@ export default function Home() {
                             </div>
                           )}
 
-                          <div className={`mt-3 rounded-xl border p-3.5 ${isPublished ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50/70"}`}>
-                            <div className="flex items-start gap-3">
+                          <div className={`mt-3 flex flex-col gap-2 rounded-xl border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between ${isPublished ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50/70"}`}>
+                            <div className="flex min-w-0 items-center gap-2.5">
                               <Checkbox
                                 id={`${article.id}-published`}
                                 checked={isPublished}
                                 onCheckedChange={(checked) => handlePublishedChange(article.id, checked === true)}
-                                className="mt-0.5"
                               />
-                              <div className="min-w-0 flex-1">
-                                <label htmlFor={`${article.id}-published`} className="cursor-pointer text-sm font-bold text-[#173023]">
-                                  발행 완료
-                                </label>
-                                <p className="mt-0.5 text-xs leading-5 text-[var(--muted-ink)]">
-                                  발행한 뒤 체크하고 비교를 마치면 히스토리에 자동 저장돼요.
-                                </p>
-                              </div>
+                              <label htmlFor={`${article.id}-published`} className="cursor-pointer text-sm font-bold text-[#173023]">
+                                발행 완료
+                              </label>
+                              {comparison && (
+                                <Badge variant="outline" className={comparison.status === "match" && comparison.formatting?.status === "match" ? "border-emerald-200 bg-white text-emerald-800" : comparison.status === "different" ? "border-rose-200 bg-white text-rose-800" : "border-amber-200 bg-white text-amber-800"}>
+                                  {comparison.status === "different"
+                                    ? `내용 ${comparison.score}%`
+                                    : comparison.status === "formatting-only"
+                                      ? comparison.formatting?.status === "different"
+                                        ? `서식 ${comparison.formatting.score}%`
+                                        : "문단·띄어쓰기 차이"
+                                      : comparison.formatting?.status === "match"
+                                        ? "내용·서식 일치"
+                                        : "내용 일치 · 서식 미확인"}
+                                </Badge>
+                              )}
                             </div>
 
-                            {isPublished && (
-                              <div className="mt-3 border-t border-emerald-200/80 pt-3">
-                                <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-                                  <div>
-                                    <label htmlFor={`${article.id}-published-text`} className="text-sm font-bold text-[#173023]">
-                                      실제 발행한 글 붙여넣기
-                                    </label>
-                                    <p className="mt-0.5 text-xs leading-5 text-[var(--muted-ink)]">
-                                      제목을 포함해도 됩니다. 비교 버튼을 누르면 제공 원고와 실제 발행본이 이 브라우저에 저장됩니다.
-                                    </p>
-                                  </div>
-                                  <span className="text-xs tabular-nums text-[var(--muted-ink)]">
-                                    {(review?.publishedText.length ?? 0).toLocaleString("ko-KR")} / {MAX_COMPARISON_LENGTH.toLocaleString("ko-KR")}
-                                  </span>
-                                </div>
-                                <Textarea
-                                  id={`${article.id}-published-text`}
-                                  value={review?.publishedText ?? ""}
-                                  maxLength={MAX_COMPARISON_LENGTH}
-                                  aria-describedby={review?.error ? `${article.id}-comparison-error` : undefined}
-                                  aria-invalid={Boolean(review?.error)}
-                                  onChange={(event) => handlePublishedTextChange(article.id, event.target.value)}
-                                  placeholder="네이버 블로그에서 실제로 발행된 본문을 복사해 여기에 붙여넣으세요."
-                                  className="min-h-32 resize-y rounded-xl border-emerald-200 bg-white text-sm leading-6 focus-visible:border-emerald-500 focus-visible:ring-emerald-100"
-                                />
-                                {review?.error && (
-                                  <p id={`${article.id}-comparison-error`} role="alert" className="mt-2 text-sm font-medium text-red-700">
-                                    {review.error}
-                                  </p>
-                                )}
-                                <Button
-                                  type="button"
-                                  className="mt-3 w-full rounded-xl bg-[#0d7a42] text-white hover:bg-[#096936] sm:w-auto"
-                                  disabled={!review?.publishedText.trim()}
-                                  onClick={() => void handleComparePublished(article)}
-                                >
-                                  <GitCompareArrows className="size-4" aria-hidden="true" />
-                                  제공 원고와 비교하기
-                                </Button>
-
-                                {comparison && (
-                                  <div
-                                    className={`mt-3 rounded-xl border p-4 ${comparison.status === "match" ? "border-emerald-200 bg-white" : comparison.status === "formatting-only" ? "border-amber-200 bg-amber-50" : "border-rose-200 bg-rose-50"}`}
-                                    role="status"
-                                    aria-live="polite"
-                                  >
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <p className="flex items-center gap-2 text-sm font-black text-[#173023]">
-                                        {comparison.status === "match" ? (
-                                          <CircleCheckBig className="size-4.5 text-emerald-600" aria-hidden="true" />
-                                        ) : (
-                                          <TriangleAlert className={`size-4.5 ${comparison.status === "formatting-only" ? "text-amber-600" : "text-rose-600"}`} aria-hidden="true" />
-                                        )}
-                                        {comparison.summary}
-                                      </p>
-                                      <Badge variant="outline" className="border-slate-200 bg-white text-slate-700">
-                                        일치도 {comparison.score}%
-                                      </Badge>
-                                    </div>
-                                    {comparison.issues.length > 0 && (
-                                      <ul className="mt-3 space-y-2">
-                                        {comparison.issues.map((comparisonIssue, issueIndex) => (
-                                          <li key={`${comparisonIssue.type}-${issueIndex}`} className="rounded-lg border border-black/5 bg-white/85 p-3">
-                                            <p className="text-sm font-bold text-[#27372f]">{comparisonIssue.title}</p>
-                                            <p className="mt-1 text-xs leading-5 text-[var(--muted-ink)]">{comparisonIssue.detail}</p>
-                                            {comparisonIssue.samples.length > 0 && (
-                                              <ul className="mt-2 space-y-1">
-                                                {comparisonIssue.samples.map((sample, sampleIndex) => (
-                                                  <li key={`${sample}-${sampleIndex}`} className="break-words rounded-md bg-slate-50 px-2.5 py-1.5 font-mono text-[11px] leading-5 text-slate-700">
-                                                    {sample}
-                                                  </li>
-                                                ))}
-                                              </ul>
-                                            )}
-                                          </li>
-                                        ))}
-                                      </ul>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
+                            {isPublished && review && (
+                              <PublicationCompareDialog
+                                articleId={article.id}
+                                title={article.title}
+                                maxLength={MAX_COMPARISON_LENGTH}
+                                review={review}
+                                onPaste={(event) => handlePublishedPaste(article.id, event)}
+                                onTextChange={(value) => handlePublishedTextChange(article.id, value)}
+                                onCompare={() => handleComparePublished(article)}
+                              />
                             )}
                           </div>
 
@@ -841,7 +953,7 @@ export default function Home() {
 
                         {isExpanded && (
                           <div className="bg-[#f8faf9] p-3 sm:p-4">
-                            <div className="preview-paper overflow-x-auto rounded-xl border border-[#dce5e0] bg-white p-5 sm:p-7" dangerouslySetInnerHTML={{ __html: article.html }} />
+                            <div className="preview-paper overflow-x-auto rounded-xl border border-[#dce5e0] bg-white p-5 sm:p-7" dangerouslySetInnerHTML={{ __html: createCopyPayload(article, false).html }} />
                           </div>
                         )}
                       </article>
@@ -849,7 +961,7 @@ export default function Home() {
                   })}
                 </div>
 
-                <p className="px-2 pt-1 text-xs leading-5 text-[var(--muted-ink)]">
+                <p className="shrink-0 px-2 pt-1 text-xs leading-5 text-[var(--muted-ink)]">
                   서식 복사는 브라우저와 네이버 편집기 상태에 따라 표 색상·간격이 달라질 수 있습니다. 이미지는 네이버 포토 업로더에서 따로 넣어주세요.
                 </p>
               </div>
@@ -872,6 +984,18 @@ export default function Home() {
             </Button>
           </div>
         )}
+
+        <ArticleBundlePanel
+          entries={bundles.entries}
+          warning={bundles.warning}
+          currentSourceText={input}
+          currentHeaderColor={headerColor}
+          currentArticleTitles={currentArticleTitles}
+          hasPublicationWork={hasPublicationWork}
+          onOpen={handleOpenBundle}
+          onDelete={bundles.remove}
+          onClear={bundles.clear}
+        />
 
         <PublicationHistoryPanel
           entries={history.entries}

@@ -71,6 +71,33 @@ test("history saves, loads, and sorts newest entries first", () => {
   assert.equal(loaded.warning, "");
 });
 
+test("history preserves bounded formatting comparison summaries without raw HTML", () => {
+  const storage = new FakeStorage();
+  const formatted = entry({
+    comparison: {
+      ...entry().comparison,
+      status: "formatting-only",
+      formatting: {
+        status: "different",
+        score: 77,
+        summary: "글자 크기와 주요 서식 3개 항목이 다릅니다.",
+        checks: [
+          { key: "font-size", label: "글자 크기", expected: "15px×2", actual: "19px×2", matched: false },
+          { key: "bold", label: "굵게", expected: "2곳", actual: "2곳", matched: true },
+        ],
+      },
+    },
+  });
+
+  savePublicationHistory(storage, [formatted]);
+  const loaded = loadPublicationHistory(storage).entries[0];
+
+  assert.equal(loaded.comparison.formatting.status, "different");
+  assert.equal(loaded.comparison.formatting.score, 77);
+  assert.equal(loaded.comparison.formatting.checks[0].key, "font-size");
+  assert.doesNotMatch(storage.getItem(HISTORY_STORAGE_KEY), /<p|<script|publishedHtml/i);
+});
+
 test("upsert replaces the same id without mutating the previous array", () => {
   const original = Object.freeze([entry()]);
   const updated = upsertHistoryEntry(original, entry({ title: "수정된 제목", updatedAt: "2026-09-22T03:00:00.000Z" }));

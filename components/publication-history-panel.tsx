@@ -42,6 +42,18 @@ export type PublicationHistoryEntry = {
     issues: readonly HistoryIssue[];
     expectedCharacters: number;
     actualCharacters: number;
+    formatting?: {
+      status: "match" | "different" | "unavailable";
+      score: number | null;
+      summary: string;
+      checks: readonly {
+        key: string;
+        label: string;
+        expected: string;
+        actual: string;
+        matched: boolean;
+      }[];
+    };
   } | null;
   completedAt: string;
   updatedAt: string;
@@ -92,7 +104,7 @@ export function PublicationHistoryPanel({
               </Badge>
             </div>
             <p className="mt-1 text-sm leading-6 text-[var(--muted-ink)]">
-              비교를 마친 글은 삭제할 때까지 이 브라우저에 저장됩니다. 공용 기기에서는 사용 후 전체 삭제해 주세요.
+              비교를 마친 글은 현재 macOS 사용자 계정의 로컬 DB에 저장되어 재시작 후에도 유지됩니다. 공용 계정에서는 사용 후 전체 삭제해 주세요.
             </p>
           </div>
         </div>
@@ -109,7 +121,7 @@ export function PublicationHistoryPanel({
               <AlertDialogHeader>
                 <AlertDialogTitle>발행 히스토리를 모두 삭제할까요?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  이 브라우저에 저장된 {entries.length}건의 기록과 손상된 저장 데이터가 모두 삭제되며 복구할 수 없습니다.
+                  로컬 DB에 저장된 {entries.length}건의 기록이 모두 삭제되며 복구할 수 없습니다.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -151,9 +163,18 @@ export function PublicationHistoryPanel({
                         {formatCompletedAt(entry.completedAt)}
                       </span>
                       {entry.comparison && (
-                        <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
-                          {STATUS_LABELS[entry.comparison.status]} · {entry.comparison.score}%
-                        </Badge>
+                        <>
+                          <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
+                            {STATUS_LABELS[entry.comparison.status]} · {entry.comparison.score}%
+                          </Badge>
+                          <Badge variant="outline" className="border-slate-200 bg-white text-slate-600">
+                            {entry.comparison.formatting?.status === "match"
+                              ? "서식 일치"
+                              : entry.comparison.formatting?.status === "different"
+                                ? `서식 ${entry.comparison.formatting.score}%`
+                                : "서식 미확인"}
+                          </Badge>
+                        </>
                       )}
                     </div>
                   </div>
@@ -162,6 +183,9 @@ export function PublicationHistoryPanel({
                   {entry.comparison && (
                     <div className="mb-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
                       <p className="text-sm font-bold text-[#24553c]">{entry.comparison.summary}</p>
+                      {entry.comparison.formatting && (
+                        <p className="mt-1 text-xs leading-5 text-[var(--muted-ink)]">{entry.comparison.formatting.summary}</p>
+                      )}
                       {entry.comparison.issues.length > 0 && (
                         <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-[var(--muted-ink)]">
                           {entry.comparison.issues.map((issue, index) => (

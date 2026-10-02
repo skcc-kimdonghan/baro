@@ -2,6 +2,8 @@ import vinext from "vinext";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
 import { readExecutionProfile } from "./scripts/execution-profile.mjs";
+import { ensureLocalAccessToken } from "./scripts/local-access-token.mjs";
+import { getLocalDataStatePath } from "./scripts/local-data-path.mjs";
 import { sites } from "./build/sites-vite-plugin";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
@@ -12,11 +14,25 @@ const { d1, r2 } = hostingConfig;
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const managedLinux = readExecutionProfile() === "managed-linux";
+const localWorkerVars: Record<string, string> =
+  !managedLinux && process.env.BARO_PUBLISH_LOCAL_MODE === "1"
+    ? { BARO_PUBLISH_LOCAL_TOKEN: ensureLocalAccessToken() }
+    : {};
 
 const localBindingConfig = {
   main: "vinext/server/fetch-handler",
   compatibility_flags: ["nodejs_compat"],
-  d1_databases: d1
+  vars: localWorkerVars,
+  d1_databases: !managedLinux
+    ? [
+        {
+          binding: "DB",
+          database_name: "baro-publish-local",
+          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+          migrations_dir: "drizzle",
+        },
+      ]
+    : d1
     ? [
         {
           binding: d1,
@@ -52,6 +68,7 @@ export default defineConfig(async () => {
 
   return {
     server: {
+      strictPort: !managedLinux,
       ...(managedLinux ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] } : {}),
       ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
     },
@@ -62,6 +79,7 @@ export default defineConfig(async () => {
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
         config: localBindingConfig,
+        persistState: managedLinux ? true : { path: getLocalDataStatePath() },
       }),
     ],
   };
