@@ -8,7 +8,6 @@ import {
   Clipboard,
   Copy,
   FileText,
-  ImagePlus,
   LockKeyhole,
   RotateCcw,
   Save,
@@ -25,6 +24,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Toaster } from "@/components/ui/sonner";
 import { ArticleBundlePanel } from "@/components/article-bundle-panel";
+import { ArticleImagePromptPanel } from "@/components/article-image-prompt-panel.mjs";
 import { GptShortcutsBar } from "@/components/gpt-shortcuts-bar";
 import { PublicationCompareDialog } from "@/components/publication-compare-dialog";
 import { PublicationHistoryPanel } from "@/components/publication-history-panel";
@@ -71,6 +71,8 @@ type FormatResult = {
   articles: readonly Article[];
 };
 
+type ArticleType = "information" | "advertisement";
+
 type CopyStatus = Record<string, string>;
 type ComparisonIssue = { type: "missing" | "added" | "formatting" | "order" | "ride-footer"; title: string; detail: string; samples: readonly string[] };
 
@@ -113,6 +115,11 @@ const HEADER_COLORS = [
   { value: "#E8F1FF", label: "블루" },
   { value: "#FFF1CC", label: "옐로" },
   { value: "#F0E9FF", label: "퍼플" },
+];
+
+const ARTICLE_TYPES: readonly { value: ArticleType; label: string; description: string }[] = [
+  { value: "information", label: "정보글", description: "기존 질문·댓글 마무리" },
+  { value: "advertisement", label: "광고글", description: "준비물 후기형 마무리" },
 ];
 
 const METHOD_LABELS = {
@@ -188,6 +195,7 @@ A: 가장 부담 없는 행동부터 시작해 흐름을 만드는 편이 좋습
 export default function Home() {
   const [input, setInput] = useState("");
   const [headerColor, setHeaderColor] = useState(DEFAULT_HEADER_COLOR);
+  const [articleType, setArticleType] = useState<ArticleType>("information");
   const [result, setResult] = useState<FormatResult | null>(null);
   const [error, setError] = useState("");
   const [expandedIds, setExpandedIds] = useState<readonly string[]>([]);
@@ -211,10 +219,10 @@ export default function Home() {
   const hasPublicationWork = Object.keys(publicationReviews).length > 0;
   const inputPanel = inputPanelView(isInputPanelExpanded);
 
-  const runFormat = useCallback((content: string, color: string) => {
+  const runFormat = useCallback((content: string, color: string, type: ArticleType) => {
     publicationRevisionRef.current += 1;
     try {
-      const nextResult = formatArticles(content, { headerColor: color }) as FormatResult;
+      const nextResult = formatArticles(content, { headerColor: color, articleType: type }) as FormatResult;
       setResult(nextResult);
       setIsInputPanelExpanded(false);
       setExpandedIds([]);
@@ -239,12 +247,12 @@ export default function Home() {
   }, []);
 
   const handleFormatAndReveal = useCallback((content: string, successMessage = "") => {
-    const nextResult = runFormat(content, headerColor);
+    const nextResult = runFormat(content, headerColor, articleType);
     if (!nextResult) return null;
     revealResults();
     if (successMessage) toast.success(successMessage);
     return nextResult;
-  }, [headerColor, revealResults, runFormat]);
+  }, [articleType, headerColor, revealResults, runFormat]);
 
   const handleInputPaste = useCallback((event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     const pastedText = event.clipboardData.getData("text/plain");
@@ -278,22 +286,24 @@ export default function Home() {
     await bundles.save({
       sourceText: input,
       headerColor,
+      articleType,
       articleTitles: currentResult.articles.map((article) => article.title),
     });
-  }, [bundles, handleFormatAndReveal, headerColor, input, result]);
+  }, [articleType, bundles, handleFormatAndReveal, headerColor, input, result]);
 
   const handleOpenBundle = useCallback((entry: ArticleBundleEntry) => {
     publicationRevisionRef.current += 1;
     setHeaderColor(entry.headerColor);
+    setArticleType(entry.articleType);
     setInput(entry.sourceText);
-    const formatted = runFormat(entry.sourceText, entry.headerColor);
+    const formatted = runFormat(entry.sourceText, entry.headerColor, entry.articleType);
     if (!formatted) return;
 
     const canRestoreTitles = formatted.articles.length === entry.articleTitles.length;
     const articles = canRestoreTitles
       ? formatted.articles.map((article, index) => {
           const titledArticle = { ...article, title: entry.articleTitles[index] };
-          const rendered = renderArticle(titledArticle, { headerColor: entry.headerColor });
+          const rendered = renderArticle(titledArticle, { headerColor: entry.headerColor, articleType: entry.articleType });
           return { ...titledArticle, ...rendered, characterCount: rendered.plainText.length };
         })
       : formatted.articles;
@@ -307,7 +317,7 @@ export default function Home() {
     setHeaderColor(color);
     if (!result) return;
     const recoloredArticles = result.articles.map((article) => {
-      const rendered = renderArticle(article, { headerColor: color });
+      const rendered = renderArticle(article, { headerColor: color, articleType });
       return {
         ...article,
         ...rendered,
@@ -318,9 +328,27 @@ export default function Home() {
     setCopyStatus({});
   };
 
+  const handleArticleTypeChange = (nextType: ArticleType) => {
+    setArticleType(nextType);
+    if (!result || nextType === articleType) return;
+    publicationRevisionRef.current += 1;
+    const articles = result.articles.map((article) => {
+      const rendered = renderArticle(article, { headerColor, articleType: nextType });
+      return {
+        ...article,
+        ...rendered,
+        characterCount: rendered.plainText.length,
+      };
+    });
+    setResult({ ...result, articles });
+    setCopyStatus({});
+    setPublicationReviews({});
+  };
+
   const handleReset = () => {
     publicationRevisionRef.current += 1;
     setInput("");
+    setArticleType("information");
     setResult(null);
     setError("");
     setExpandedIds([]);
@@ -337,7 +365,7 @@ export default function Home() {
       articles: result.articles.map((article) => {
         if (article.id !== articleId) return article;
         const titledArticle = { ...article, title };
-        const rendered = renderArticle(titledArticle, { headerColor });
+        const rendered = renderArticle(titledArticle, { headerColor, articleType });
         return {
           ...titledArticle,
           ...rendered,
@@ -558,6 +586,7 @@ export default function Home() {
             properties: {
               content: { type: "string", minLength: 1, maxLength: MAX_INPUT_LENGTH },
               headerColor: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
+              articleType: { type: "string", enum: ["information", "advertisement"] },
             },
             required: ["content"],
             additionalProperties: false,
@@ -565,9 +594,10 @@ export default function Home() {
           annotations: { readOnlyHint: false, untrustedContentHint: true },
           execute: (value: unknown) => {
             if (!value || typeof value !== "object") throw new Error("원고 내용이 필요합니다.");
-            const { content, headerColor: requestedColor } = value as {
+            const { content, headerColor: requestedColor, articleType: requestedType } = value as {
               content?: unknown;
               headerColor?: unknown;
+              articleType?: unknown;
             };
             if (typeof content !== "string" || !content.trim()) {
               throw new Error("content에는 정리할 원고를 입력해야 합니다.");
@@ -576,9 +606,11 @@ export default function Home() {
               typeof requestedColor === "string" && /^#[0-9a-f]{6}$/i.test(requestedColor)
                 ? requestedColor
                 : headerColor;
+            const type: ArticleType = requestedType === "advertisement" ? "advertisement" : "information";
             setInput(content);
             setHeaderColor(color);
-            const formatted = runFormat(content, color);
+            setArticleType(type);
+            const formatted = runFormat(content, color, type);
             if (!formatted) throw new Error("원고를 정리하지 못했습니다.");
             return {
               articleCount: formatted.articles.length,
@@ -619,6 +651,7 @@ export default function Home() {
           warning={gptShortcuts.warning}
           onAdd={gptShortcuts.add}
           onUpdate={gptShortcuts.update}
+          onMove={gptShortcuts.move}
           onRemove={gptShortcuts.remove}
         />
       </header>
@@ -701,6 +734,32 @@ export default function Home() {
             </div>
 
             <CardContent id="input-panel-content" className="flex min-h-0 flex-1 flex-col space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+              <div className="flex flex-col gap-2 rounded-2xl border border-[#d8e7de] bg-[#f7fbf8] p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-bold text-[#173023]">글뭉치 종류</p>
+                  <p className="text-xs leading-5 text-[var(--muted-ink)]">선택한 종류에 맞춰 모든 글의 마지막 문구가 바뀝니다.</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="글뭉치 종류">
+                  {ARTICLE_TYPES.map((type) => {
+                    const selected = articleType === type.value;
+                    return (
+                      <button
+                        key={type.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        aria-label={`${type.label}: ${type.description}`}
+                        onClick={() => handleArticleTypeChange(type.value)}
+                        className={`rounded-xl border px-4 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ${selected ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-[#173023] hover:border-emerald-300"}`}
+                      >
+                        <span className="block text-sm font-extrabold">{type.label}</span>
+                        <span className={`block text-[11px] ${selected ? "text-emerald-50" : "text-[var(--muted-ink)]"}`}>{type.description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className={`relative ${inputPanel.textareaWrapperClass}`}>
                 <Textarea
                   aria-label="정리할 블로그 원고"
@@ -857,8 +916,8 @@ export default function Home() {
                                   <Table2 className="size-3.5" aria-hidden="true" /> 표 {article.tableCount}개
                                 </span>
                                 {article.engagementCtaAdded && (
-                                  <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-800">
-                                    반응 문구 자동 추가
+                                  <Badge variant="outline" className={articleType === "advertisement" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-violet-200 bg-violet-50 text-violet-800"}>
+                                    {articleType === "advertisement" ? "광고글 마무리" : "정보글 마무리"}
                                   </Badge>
                                 )}
                                 {isPublished && (
@@ -885,28 +944,11 @@ export default function Home() {
                             </Button>
                           </div>
 
-                          {article.imagePrompt && (
-                            <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50/70 p-3.5">
-                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                <p className="flex items-center gap-2 text-sm font-bold text-sky-950">
-                                  <ImagePlus className="size-4 text-sky-700" aria-hidden="true" />
-                                  아래 이미지를 생성해주세요
-                                </p>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  className="border-sky-200 bg-white text-sky-900 hover:bg-sky-100"
-                                  onClick={() => void handleCopy(article, "image")}
-                                >
-                                  <Copy className="size-3.5" aria-hidden="true" /> 이미지 요청 복사
-                                </Button>
-                              </div>
-                              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                                {article.imagePrompt}
-                              </p>
-                            </div>
-                          )}
+                          <ArticleImagePromptPanel
+                            article={article}
+                            index={index}
+                            onCopy={() => void handleCopy(article, "image")}
+                          />
 
                           <div className={`mt-3 flex flex-col gap-2 rounded-xl border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between ${isPublished ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50/70"}`}>
                             <div className="flex min-w-0 items-center gap-2.5">
@@ -990,6 +1032,7 @@ export default function Home() {
           warning={bundles.warning}
           currentSourceText={input}
           currentHeaderColor={headerColor}
+          currentArticleType={articleType}
           currentArticleTitles={currentArticleTitles}
           hasPublicationWork={hasPublicationWork}
           onOpen={handleOpenBundle}

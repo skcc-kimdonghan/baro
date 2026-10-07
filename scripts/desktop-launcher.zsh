@@ -52,14 +52,29 @@ listener_is_ours() {
 }
 
 site_is_ready() {
-  local root_status
+  local deadline="${1:-$(( $(/bin/date +%s) + 6 ))}"
+  local probe_timeout root_status local_data_status
   listener_is_ours || return 1
-  /usr/bin/curl --noproxy '*' --fail --silent --show-error --connect-timeout 0.5 --max-time 1 \
+  probe_timeout=$(( deadline - $(/bin/date +%s) ))
+  (( probe_timeout > 0 )) || return 1
+  /usr/bin/curl --noproxy '*' --fail --silent --show-error --connect-timeout 0.5 --max-time "${probe_timeout}" \
     "${service_url}/baro-health.txt" 2>/dev/null \
     | /usr/bin/grep --fixed-strings --line-regexp --quiet "baro-publish-ok" || return 1
-  root_status="$(/usr/bin/curl --noproxy '*' --silent --show-error --connect-timeout 0.5 --max-time 2 \
+  probe_timeout=$(( deadline - $(/bin/date +%s) ))
+  (( probe_timeout > 0 )) || return 1
+  root_status="$(/usr/bin/curl --noproxy '*' --silent --show-error --connect-timeout 0.5 --max-time "${probe_timeout}" \
     --output /dev/null --write-out '%{http_code}' "${service_url}" 2>/dev/null)" || return 1
-  [[ "${root_status}" == "200" ]]
+  [[ "${root_status}" == "200" ]] || return 1
+  read_access_token || return 1
+  probe_timeout=$(( deadline - $(/bin/date +%s) ))
+  (( probe_timeout > 0 )) || return 1
+  local_data_status="$(
+    /usr/bin/printf '%s\n' "header = \"x-baro-publish-token: ${local_access_token}\"" \
+      | /usr/bin/curl --config - --noproxy '*' --silent --show-error \
+        --connect-timeout 0.5 --max-time "${probe_timeout}" --output /dev/null --write-out '%{http_code}' \
+        "${service_url}/api/local-data?collection=shortcuts" 2>/dev/null
+  )" || return 1
+  [[ "${local_data_status}" == "200" ]]
 }
 
 write_launcher_log() {
@@ -86,6 +101,16 @@ open_site() {
   fi
 }
 
+read_access_token() {
+  if [[ -e "${access_token_path}" && (-L "${access_token_path}" || ! -f "${access_token_path}" || ! -O "${access_token_path}") ]]; then
+    return 1
+  fi
+  [[ -f "${access_token_path}" ]] || return 1
+  local_access_token="$(/usr/bin/tr -d '[:space:]' < "${access_token_path}")" || return 1
+  /usr/bin/printf '%s\n' "${local_access_token}" \
+    | /usr/bin/grep --extended-regexp --quiet '^[[:xdigit:]]{64}$'
+}
+
 prepare_access_token() {
   local token_temp link_temp
   if [[ -e "${access_token_path}" && (-L "${access_token_path}" || ! -f "${access_token_path}" || ! -O "${access_token_path}") ]]; then
@@ -98,9 +123,7 @@ prepare_access_token() {
     /bin/mv -f "${token_temp}" "${access_token_path}" || return 1
   fi
   /bin/chmod 400 "${access_token_path}" || return 1
-  local_access_token="$(/usr/bin/tr -d '[:space:]' < "${access_token_path}")" || return 1
-  /usr/bin/printf '%s\n' "${local_access_token}" \
-    | /usr/bin/grep --extended-regexp --quiet '^[[:xdigit:]]{64}$' || return 1
+  read_access_token || return 1
 
   if [[ -e "${access_link_path}" && (-L "${access_link_path}" || ! -f "${access_link_path}" || ! -O "${access_link_path}") ]]; then
     return 1
@@ -220,9 +243,9 @@ managed_job_exists() {
 }
 
 wait_until_ready() {
-  local deadline=$(( $(/bin/date +%s) + 30 ))
+  local deadline=$(( $(/bin/date +%s) + 60 ))
   while (( $(/bin/date +%s) < deadline )); do
-    site_is_ready && return 0
+    site_is_ready "${deadline}" && return 0
     /bin/sleep 0.25
   done
   return 1
@@ -268,7 +291,7 @@ if (( lock_held == 0 )); then
   if (( background_mode == 1 )); then
     lock_args+=(--background)
   fi
-  /usr/bin/lockf -k -t 40 "${launcher_lock_path}" /bin/zsh "$0" "${lock_args[@]}"
+  /usr/bin/lockf -k -t 90 "${launcher_lock_path}" /bin/zsh "$0" "${lock_args[@]}"
   lock_status=$?
   if (( lock_status >= 64 && lock_status <= 78 )); then
     show_error "다른 바로발행 실행을 기다리는 동안 시간이 초과됐습니다."
@@ -313,7 +336,7 @@ if ! site_is_ready; then
       /bin/launchctl remove "${job_label}" >/dev/null 2>&1 || true
       submitted_job=0
     fi
-    show_error "바로발행 서버가 30초 안에 준비되지 않아 중지했습니다."
+    show_error "바로발행 서버가 60초 안에 준비되지 않아 중지했습니다."
     exit 1
   fi
 fi

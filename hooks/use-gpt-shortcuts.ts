@@ -11,6 +11,7 @@ import {
 import {
   addGptShortcut,
   createGptShortcut,
+  moveGptShortcut,
   removeGptShortcut,
   updateGptShortcut,
 } from "@/lib/gpt-shortcuts.mjs";
@@ -179,5 +180,34 @@ export function useGptShortcuts() {
     }
   }, [applyEntries, refresh]);
 
-  return { entries, warning, add, update, remove } as const;
+  const move = useCallback(async (id: string, direction: "up" | "down") => {
+    const mutationRevision = ++requestRevisionRef.current;
+    try {
+      const saved = await getBrowserLocalDataStore().mutate(
+        "shortcuts",
+        (persisted: readonly GptShortcutEntry[]) => moveGptShortcut(persisted, id, direction),
+      ) as { entries: readonly GptShortcutEntry[] };
+      if (!saved.entries.some((entry) => entry.id === id)) {
+        throw new Error("이동한 바로가기가 DB 저장 목록에 남지 않았습니다. 다시 시도해 주세요.");
+      }
+      if (isCurrentRequestGeneration(mutationRevision, requestRevisionRef.current)) {
+        applyEntries(saved.entries);
+        setWarning("");
+      } else {
+        void refresh();
+      }
+      notifyLocalDataChanged("shortcuts");
+      toast.success("바로가기 순서를 변경했습니다.");
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "바로가기 순서를 변경하지 못했습니다.";
+      if (shouldReportRequestFailure(mutationRevision, requestRevisionRef.current)) {
+        setWarning(message);
+        toast.error(message);
+      } else {
+        void refresh();
+      }
+    }
+  }, [applyEntries, refresh]);
+
+  return { entries, warning, add, update, move, remove } as const;
 }

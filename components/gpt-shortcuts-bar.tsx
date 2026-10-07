@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useRef, useState } from "react";
-import { ExternalLink, Link2, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ExternalLink, Link2, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -26,12 +26,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { type GptShortcutEntry } from "@/hooks/use-gpt-shortcuts";
 import { MAX_GPT_SHORTCUT_NAME_LENGTH, MAX_GPT_SHORTCUTS } from "@/lib/gpt-shortcuts.mjs";
+import {
+  SHORTCUTS_DIALOG_CLASS,
+  SHORTCUTS_NAV_CLASS,
+  SHORTCUTS_ROW_CLASS,
+  shortcutMoveControls,
+} from "@/lib/gpt-shortcuts-view.mjs";
 
 type GptShortcutsBarProps = {
   entries: readonly GptShortcutEntry[];
   warning: string;
   onAdd: (input: { name: string; url: string }) => Promise<boolean>;
   onUpdate: (id: string, input: { name: string; url: string }) => Promise<boolean>;
+  onMove: (id: string, direction: "up" | "down") => Promise<void>;
   onRemove: (id: string) => Promise<void>;
 };
 
@@ -43,12 +50,13 @@ function shortcutHost(url: string) {
   }
 }
 
-export function GptShortcutsBar({ entries, warning, onAdd, onUpdate, onRemove }: GptShortcutsBarProps) {
+export function GptShortcutsBar({ entries, warning, onAdd, onUpdate, onMove, onRemove }: GptShortcutsBarProps) {
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [movingId, setMovingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<GptShortcutEntry | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -79,6 +87,16 @@ export function GptShortcutsBar({ entries, warning, onAdd, onUpdate, onRemove }:
     if (saved) resetForm();
   }
 
+  async function handleMove(id: string, direction: "up" | "down") {
+    if (movingId !== null) return;
+    setMovingId(id);
+    try {
+      await onMove(id, direction);
+    } finally {
+      setMovingId(null);
+    }
+  }
+
   return (
     <div className="border-t border-[var(--line)] bg-[#f8fbf9]">
       <div className="mx-auto flex max-w-[1500px] items-center gap-2 px-4 py-2 sm:px-6 lg:px-8">
@@ -87,7 +105,7 @@ export function GptShortcutsBar({ entries, warning, onAdd, onUpdate, onRemove }:
           바로가기
         </span>
 
-        <nav aria-label="자주 가는 웹사이트" className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:thin]">
+        <nav aria-label="자주 가는 웹사이트" className={SHORTCUTS_NAV_CLASS}>
           <div className="flex min-w-max items-center gap-2 pr-2">
             {entries.map((entry) => (
               <a
@@ -129,7 +147,7 @@ export function GptShortcutsBar({ entries, warning, onAdd, onUpdate, onRemove }:
               <span className="text-xs text-[var(--muted-ink)]">{entries.length}/{MAX_GPT_SHORTCUTS}</span>
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-h-[min(720px,calc(100vh-2rem))] overflow-y-auto sm:max-w-xl">
+          <DialogContent className={SHORTCUTS_DIALOG_CLASS}>
             <DialogHeader>
               <DialogTitle>바로가기 관리</DialogTitle>
               <DialogDescription>
@@ -137,7 +155,7 @@ export function GptShortcutsBar({ entries, warning, onAdd, onUpdate, onRemove }:
               </DialogDescription>
             </DialogHeader>
 
-            <form className="rounded-xl border border-[var(--line)] bg-[#f8fbf9] p-4" onSubmit={handleSubmit}>
+            <form className="min-w-0 rounded-xl border border-[var(--line)] bg-[#f8fbf9] p-4" onSubmit={handleSubmit}>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <h3 className="text-sm font-bold">{isEditing ? "바로가기 수정" : "새 바로가기"}</h3>
                 <span className="text-xs text-[var(--muted-ink)]">{entries.length}/{MAX_GPT_SHORTCUTS}</span>
@@ -172,7 +190,7 @@ export function GptShortcutsBar({ entries, warning, onAdd, onUpdate, onRemove }:
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-[var(--muted-ink)]">
-                  {atLimit && !isEditing ? "최대 6개를 등록했습니다. 기존 항목을 수정하거나 삭제해 주세요." : "HTTPS 웹사이트 주소를 등록할 수 있습니다."}
+                  {atLimit && !isEditing ? `최대 ${MAX_GPT_SHORTCUTS}개를 등록했습니다. 기존 항목을 수정하거나 삭제해 주세요.` : "HTTPS 웹사이트 주소를 등록할 수 있습니다."}
                 </p>
                 <div className="flex gap-2">
                   {isEditing && (
@@ -195,21 +213,49 @@ export function GptShortcutsBar({ entries, warning, onAdd, onUpdate, onRemove }:
                   아직 등록한 바로가기가 없습니다.
                 </p>
               ) : (
-                <ul className="grid gap-2">
-                  {entries.map((entry) => (
-                    <li key={entry.id} className="flex items-center gap-2 rounded-xl border border-[var(--line)] p-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-bold">{entry.name}</p>
-                        <p className="truncate text-xs text-[var(--muted-ink)]">{entry.url}</p>
-                      </div>
-                      <Button type="button" variant="outline" size="icon-sm" aria-label={`${entry.name} 수정`} onClick={() => beginEdit(entry)}>
-                        <Pencil aria-hidden="true" />
-                      </Button>
-                      <Button type="button" variant="outline" size="icon-sm" aria-label={`${entry.name} 삭제`} onClick={() => setDeleteTarget(entry)}>
-                        <Trash2 aria-hidden="true" />
-                      </Button>
-                    </li>
-                  ))}
+                <ul className="grid min-w-0 gap-2">
+                  {entries.map((entry, index) => {
+                    const controls = shortcutMoveControls(entry.name, index, entries.length);
+                    const moving = movingId !== null;
+                    return (
+                      <li key={entry.id} className={SHORTCUTS_ROW_CLASS}>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-bold">{entry.name}</p>
+                          <p className="truncate text-xs text-[var(--muted-ink)]">{entry.url}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <div className="flex items-center gap-1" role="group" aria-label={`${entry.name} 순서 변경`}>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon-sm"
+                              aria-label={controls.upLabel}
+                              disabled={!controls.canMoveUp || moving}
+                              onClick={() => void handleMove(entry.id, "up")}
+                            >
+                              <ArrowUp aria-hidden="true" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon-sm"
+                              aria-label={controls.downLabel}
+                              disabled={!controls.canMoveDown || moving}
+                              onClick={() => void handleMove(entry.id, "down")}
+                            >
+                              <ArrowDown aria-hidden="true" />
+                            </Button>
+                          </div>
+                          <Button type="button" variant="outline" size="icon-sm" aria-label={`${entry.name} 수정`} onClick={() => beginEdit(entry)}>
+                            <Pencil aria-hidden="true" />
+                          </Button>
+                          <Button type="button" variant="outline" size="icon-sm" aria-label={`${entry.name} 삭제`} onClick={() => setDeleteTarget(entry)}>
+                            <Trash2 aria-hidden="true" />
+                          </Button>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </section>

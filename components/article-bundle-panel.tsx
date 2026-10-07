@@ -30,6 +30,7 @@ type ArticleBundlePanelProps = {
   warning: string;
   currentSourceText: string;
   currentHeaderColor: string;
+  currentArticleType: "information" | "advertisement";
   currentArticleTitles: readonly string[] | null;
   hasPublicationWork: boolean;
   onOpen: (entry: ArticleBundleEntry) => void;
@@ -89,6 +90,7 @@ export function ArticleBundlePanel({
   warning,
   currentSourceText,
   currentHeaderColor,
+  currentArticleType,
   currentArticleTitles,
   hasPublicationWork,
   onOpen,
@@ -179,6 +181,7 @@ export function ArticleBundlePanel({
               const needsConfirmation = hasArticleBundleWorkspaceChanges(entry, {
                 sourceText: currentSourceText,
                 headerColor: currentHeaderColor,
+                articleType: currentArticleType,
                 articleTitles: currentArticleTitles,
                 hasPublicationWork,
               });
@@ -194,6 +197,9 @@ export function ArticleBundlePanel({
                         </span>
                         <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
                           {entry.articleTitles.length}편 · {entry.sourceText.length.toLocaleString("ko-KR")}자
+                        </Badge>
+                        <Badge variant="outline" className={entry.articleType === "advertisement" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-violet-200 bg-violet-50 text-violet-800"}>
+                          {entry.articleType === "advertisement" ? "광고글" : "정보글"}
                         </Badge>
                       </div>
                     </div>

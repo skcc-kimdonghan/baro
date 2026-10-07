@@ -5,6 +5,7 @@ export const articleBundles = sqliteTable("article_bundles", {
   schemaVersion: integer("schema_version").notNull(),
   sourceText: text("source_text").notNull(),
   headerColor: text("header_color").notNull(),
+  articleType: text("article_type").notNull().default("information"),
   articleTitlesJson: text("article_titles_json").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

@@ -95,6 +95,23 @@ test("unknown collections, invalid entries, duplicates, and collection limits ar
   );
 });
 
+test("the database model accepts ten shortcuts and rejects an eleventh", () => {
+  const ten = Array.from({ length: 10 }, (_, index) => shortcut(
+    `shortcut-${index + 1}`,
+    `바로가기 ${index + 1}`,
+    `https://shortcut-${index + 1}.example.com/`,
+  ));
+
+  assert.equal(normalizeLocalDataCollection("shortcuts", ten).length, 10);
+  assert.throws(
+    () => normalizeLocalDataCollection("shortcuts", [
+      ...ten,
+      shortcut("shortcut-11", "바로가기 11", "https://shortcut-11.example.com/"),
+    ]),
+    (error) => error instanceof Error && error.code === "LOCAL_DATA_LIMIT_EXCEEDED",
+  );
+});
+
 test("replacing one collection never mutates or replaces the other collections", () => {
   const initial = replaceLocalDataCollection(
     createEmptyLocalDataSnapshot(),

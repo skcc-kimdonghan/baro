@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 
@@ -9,6 +10,11 @@ import {
 import { createEmptyLocalDataSnapshot } from "../lib/local-data-model.mjs";
 
 const now = "2026-10-02T00:00:00.000Z";
+const drizzleMigrationUrls = [
+  new URL("../drizzle/0000_powerful_karma.sql", import.meta.url),
+  new URL("../drizzle/0001_handy_the_santerians.sql", import.meta.url),
+  new URL("../drizzle/0002_fancy_skaar.sql", import.meta.url),
+];
 
 function bundle(id = "bundle-1") {
   return {
@@ -17,6 +23,7 @@ function bundle(id = "bundle-1") {
     displayTitle: id,
     sourceText: `# ${id}\n\n본문`,
     headerColor: "#F7F7F7",
+    articleType: "information",
     articleTitles: [id],
     createdAt: now,
     updatedAt: now,
@@ -34,7 +41,7 @@ function shortcut(id = "shortcut-1") {
   };
 }
 
-async function withDatabase(run) {
+async function withRawDatabase(run) {
   const miniflare = new Miniflare(convertV4MiniflareOptions({
     modules: true,
     script: "export default { fetch() { return new Response('ok') } }",
@@ -43,12 +50,115 @@ async function withDatabase(run) {
   }));
   try {
     const database = await miniflare.getD1Database("DB");
-    await applyLocalDataSchema(database);
     await run(database);
   } finally {
     await miniflare.dispose();
   }
 }
+
+async function withDatabase(run) {
+  await withRawDatabase(async (database) => {
+    await applyLocalDataSchema(database);
+    await run(database);
+  });
+}
+
+async function applyDrizzleMigrations(database, migrationUrls = drizzleMigrationUrls) {
+  for (const migrationUrl of migrationUrls) {
+    const migration = await readFile(migrationUrl, "utf8");
+    const statements = migration
+      .split("--> statement-breakpoint")
+      .map((statement) => statement.trim())
+      .filter(Boolean)
+      .map((statement) => database.prepare(statement));
+    await database.batch(statements);
+  }
+}
+
+function normalizeSchemaSql(sql) {
+  return String(sql ?? "")
+    .toLowerCase()
+    .replace(/[`"]/g, "")
+    .replace(/if not exists\s+/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*([(),])\s*/g, "$1")
+    .trim();
+}
+
+async function databaseSchemaSnapshot(database) {
+  const schema = await database.prepare(`SELECT type, name, tbl_name, sql
+    FROM sqlite_master
+    WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'
+    ORDER BY type, name`).all();
+  const revisions = await database.prepare(`SELECT collection, revision, updated_at
+    FROM collection_revisions ORDER BY collection`).all();
+  return {
+    schema: (schema.results ?? []).map((entry) => ({
+      type: entry.type,
+      name: entry.name,
+      table: entry.tbl_name,
+      sql: normalizeSchemaSql(entry.sql),
+    })),
+    revisions: revisions.results ?? [],
+  };
+}
+
+test("repository bootstrap schema stays identical to the checked-in Drizzle migrations", async () => {
+  let bootstrapSnapshot;
+  let migrationSnapshot;
+
+  await withRawDatabase(async (database) => {
+    await applyLocalDataSchema(database);
+    bootstrapSnapshot = await databaseSchemaSnapshot(database);
+  });
+  await withRawDatabase(async (database) => {
+    await applyDrizzleMigrations(database);
+    migrationSnapshot = await databaseSchemaSnapshot(database);
+  });
+
+  assert.deepEqual(bootstrapSnapshot, migrationSnapshot);
+});
+
+test("the article type migration keeps legacy rows as information articles", async () => {
+  await withRawDatabase(async (database) => {
+    await applyDrizzleMigrations(database, drizzleMigrationUrls.slice(0, 2));
+    await database.prepare(`INSERT INTO article_bundles
+      (id, schema_version, source_text, header_color, article_titles_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .bind(
+        "legacy-bundle",
+        1,
+        "# 예전 정보글\n\n본문",
+        "#F7F7F7",
+        JSON.stringify(["예전 정보글"]),
+        now,
+        now,
+      )
+      .run();
+
+    await applyDrizzleMigrations(database, drizzleMigrationUrls.slice(2));
+    const migrated = await database.prepare(
+      "SELECT article_type FROM article_bundles WHERE id = ?",
+    ).bind("legacy-bundle").first();
+
+    assert.equal(migrated?.article_type, "information");
+  });
+});
+
+test("article bundle type survives a database reopen", async () => {
+  await withDatabase(async (database) => {
+    const repository = createD1LocalDataRepository({ database, now: () => now });
+    await repository.replaceCollection(
+      "articleBundles",
+      [{ ...bundle("advertisement-bundle"), articleType: "advertisement" }],
+      0,
+    );
+    const reopened = createD1LocalDataRepository({ database, now: () => now });
+    const loaded = await reopened.readCollection("articleBundles");
+
+    assert.equal(loaded.entries[0].articleType, "advertisement");
+  });
+});
 
 test("D1 repository replaces and reads individual rows with durable revisions", async () => {
   await withDatabase(async (database) => {
@@ -66,6 +176,28 @@ test("D1 repository replaces and reads individual rows with durable revisions", 
       () => repository.replaceCollection("shortcuts", [], 0),
       (error) => error instanceof Error && error.code === "REVISION_CONFLICT",
     );
+  });
+});
+
+test("reordered shortcuts keep their exact order after reopening the repository", async () => {
+  await withDatabase(async (database) => {
+    const repository = createD1LocalDataRepository({ database, now: () => now });
+    await repository.replaceCollection(
+      "shortcuts",
+      [shortcut("first"), shortcut("second"), shortcut("third")],
+      0,
+    );
+    const reordered = await repository.replaceCollection(
+      "shortcuts",
+      [shortcut("third"), shortcut("first"), shortcut("second")],
+      1,
+    );
+    const reopened = createD1LocalDataRepository({ database, now: () => now });
+    const loaded = await reopened.readCollection("shortcuts");
+
+    assert.equal(reordered.revision, 2);
+    assert.equal(loaded.revision, 2);
+    assert.deepEqual(loaded.entries.map((entry) => entry.id), ["third", "first", "second"]);
   });
 });
 

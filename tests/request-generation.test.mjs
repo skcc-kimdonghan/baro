@@ -26,11 +26,11 @@ test("every persistent mutation hook guards failure reporting by generation", as
   ];
   const sources = await Promise.all(hookUrls.map((url) => readFile(url, "utf8")));
 
-  for (const source of sources) {
+  for (const [index, source] of sources.entries()) {
     assert.equal(
       source.match(/shouldReportRequestFailure\(/g)?.length,
-      3,
-      "save/add/update/remove/clear mutation catches must suppress stale warnings",
+      hookUrls[index].pathname.endsWith("use-gpt-shortcuts.ts") ? 4 : 3,
+      "save/add/update/move/remove/clear mutation catches must suppress stale warnings",
     );
   }
 });

@@ -469,16 +469,46 @@ test("whitespace normalization keeps Korean and emoji while removing noisy spaci
   assert.equal(normalized, `안녕하세요. 반갑습니다. 😊\n\n다음 문단`);
 });
 
-test("markdown tables render header color, alignment, and safe cell text", () => {
+test("markdown tables render header color, center every cell, and preserve safe cell text", () => {
   const article = splitArticles(bundledArticles).articles[0];
   const rendered = renderArticle(article, { headerColor: "#DFF7E8" });
+  const tableCells = [...rendered.html.matchAll(/<(?:th|td)\b[^>]*style="([^"]*)"/g)];
 
   assert.match(rendered.html, /<table/);
   assert.match(rendered.html, /background-color:#DFF7E8/);
-  assert.match(rendered.html, /text-align:right/);
-  assert.match(rendered.html, /text-align:center/);
+  assert.equal(tableCells.length, 9);
+  for (const [, style] of tableCells) assert.match(style, /(?:^|;)text-align:center(?:;|$)/);
+  assert.doesNotMatch(rendered.html, /text-align:(?:left|right)/);
   assert.equal(rendered.tableCount, 1);
   assert.match(rendered.plainText, /구분\t월 비용\t추천도/);
+});
+
+test("mixed Markdown alignment markers still center all cells without damaging surrounding text", () => {
+  const article = splitArticles(`# 혼합 정렬 표
+
+표 앞의 일반 설명은 그대로 남습니다.
+
+| 항목 | 월 비용 | 상태 |
+| :--- | ---: | :---: |
+| A \\| B | 10,000원 | 완료 |
+| 절약 요금제 | 20,000원 | 확인 중 |
+
+표 뒤의 일반 설명도 그대로 남습니다.`).articles[0];
+  const rendered = renderArticle(article, { headerColor: DEFAULT_HEADER_COLOR });
+  const headers = [...rendered.html.matchAll(/<th\b[^>]*style="([^"]*)"[^>]*>/g)];
+  const cells = [...rendered.html.matchAll(/<td\b[^>]*style="([^"]*)"[^>]*>/g)];
+
+  assert.equal(rendered.tableCount, 1);
+  assert.equal(headers.length, 3);
+  assert.equal(cells.length, 6);
+  for (const [, style] of [...headers, ...cells]) {
+    assert.match(style, /(?:^|;)text-align:center(?:;|$)/);
+  }
+  assert.doesNotMatch(rendered.html, /text-align:(?:left|right)/);
+  assert.match(rendered.html, /<td[^>]*>A \| B<\/td>/);
+  assert.match(rendered.plainText, /항목\t월 비용\t상태\nA \| B\t10,000원\t완료/);
+  assert.match(rendered.plainText, /표 앞의 일반 설명은 그대로 남습니다\./);
+  assert.match(rendered.plainText, /표 뒤의 일반 설명도 그대로 남습니다\./);
 });
 
 test("consecutive pipe rows without a divider are repaired into a table", () => {
@@ -1198,18 +1228,18 @@ A: 가입기간을 먼저 확인합니다.
 
   가입내역에서 시작일과 종료일을 확인하세요.`).articles[0];
   const payload = createCopyPayload(article);
-  const answerWithSingleGap = /<p style="margin:0;[^"]*"><strong>A: 가입기간을 먼저 확인합니다\.<\/strong><\/p><p style="margin:0;font-size:16px;line-height:1\.8;color:#666666;"><br><\/p><p[^>]*>가입내역에서 시작일과 종료일을 확인하세요\.<\/p>/;
+  const answerWithSingleGap = /<p style="margin:0 0 18px;[^"]*"><strong>A: 가입기간을 먼저 확인합니다\.<\/strong><\/p><p[^>]*>가입내역에서 시작일과 종료일을 확인하세요\.<\/p>/;
   const blankParagraph = /<p[^>]*>\s*<br\s*\/?>(?:\s*)<\/p>/g;
 
   assert.match(article.html, answerWithSingleGap);
   assert.match(payload.html, answerWithSingleGap);
-  assert.equal((article.html.match(blankParagraph) ?? []).length, 1);
-  assert.equal((payload.html.match(blankParagraph) ?? []).length, 1);
+  assert.equal((article.html.match(blankParagraph) ?? []).length, 0);
+  assert.equal((payload.html.match(blankParagraph) ?? []).length, 0);
   assert.match(article.plainText, /A: 가입기간을 먼저 확인합니다\.\n\n가입내역에서 시작일과 종료일을 확인하세요\./);
   assert.equal(payload.plainText, article.plainText);
 });
 
-test("a bold-wrapped A summary keeps one visible blank line before its detail body", () => {
+test("a bold-wrapped A summary keeps one paragraph gap without a blank paragraph", () => {
   const article = formatArticles(`# 연금 답변
 
 ## 1. 연금소득금액은 얼마인가요?
@@ -1218,13 +1248,13 @@ test("a bold-wrapped A summary keeps one visible blank line before its detail bo
 
 그다음 종합소득 과세 여부를 확인합니다.`).articles[0];
   const payload = createCopyPayload(article);
-  const answerWithSingleGap = /<p style="margin:0;[^"]*"><strong>A: 과세대상 연금이 연 500만원이라면 연금소득금액은 90만원입니다\.<\/strong><\/p><p style="margin:0;font-size:16px;line-height:1\.8;color:#666666;"><br><\/p><p[^>]*>그다음 종합소득 과세 여부를 확인합니다\.<\/p>/;
+  const answerWithSingleGap = /<p style="margin:0 0 18px;[^"]*"><strong>A: 과세대상 연금이 연 500만원이라면 연금소득금액은 90만원입니다\.<\/strong><\/p><p[^>]*>그다음 종합소득 과세 여부를 확인합니다\.<\/p>/;
   const blankParagraph = /<p[^>]*>\s*<br\s*\/?>(?:\s*)<\/p>/g;
 
   assert.match(article.html, answerWithSingleGap);
   assert.match(payload.html, answerWithSingleGap);
-  assert.equal((article.html.match(blankParagraph) ?? []).length, 1);
-  assert.equal((payload.html.match(blankParagraph) ?? []).length, 1);
+  assert.equal((article.html.match(blankParagraph) ?? []).length, 0);
+  assert.equal((payload.html.match(blankParagraph) ?? []).length, 0);
   assert.doesNotMatch(payload.html, /<strong>\s*<strong>/);
   assert.match(payload.plainText, /A: 과세대상 연금이 연 500만원이라면 연금소득금액은 90만원입니다\.\n\n그다음 종합소득 과세 여부를 확인합니다\./);
   assert.doesNotMatch(payload.plainText, /\*\*/);
@@ -1323,6 +1353,79 @@ test("only the opening question line is italicized", () => {
 
 뒤에서 질문해도 될까요?`).articles[0];
   assert.doesNotMatch(statementFirst.html, /<em\b/);
+});
+
+const markdownLabelWithRepeatedTitle = `## 1번 글 — 국민연금 수령 조건
+
+국민연금 수령 조건
+
+“국민연금은 언제부터 받을 수 있을까요?”
+
+**A: 가입 기간과 출생연도를 먼저 확인합니다.**
+
+자세한 수령 조건은 가입내역에서 확인하세요.`;
+
+test("a Markdown numbered label supplies the title and removes its immediately repeated plain title", () => {
+  const result = splitArticles(markdownLabelWithRepeatedTitle);
+  const article = result.articles[0];
+
+  assert.equal(result.method, "label");
+  assert.equal(article.title, "국민연금 수령 조건");
+  assert.match(article.bodySource, /^“국민연금은 언제부터 받을 수 있을까요\?”/);
+  assert.doesNotMatch(article.bodySource, /^국민연금 수령 조건(?:\n|$)/);
+});
+
+test("a repeated label title remains as the first body line when ordinary prose follows", () => {
+  const article = splitArticles(`## 1번 글 — 국민연금 수령 조건
+
+국민연금 수령 조건
+가입기간과 출생연도를 차례대로 설명합니다.`).articles[0];
+
+  assert.equal(article.title, "국민연금 수령 조건");
+  assert.equal(
+    article.bodySource,
+    "국민연금 수령 조건\n가입기간과 출생연도를 차례대로 설명합니다.",
+  );
+});
+
+test("an adjacent repeated label title is removed when the first real body line is a question", () => {
+  const article = splitArticles(`## 1번 글 — 국민연금 수령 조건
+
+국민연금 수령 조건
+“국민연금은 언제부터 받을 수 있을까요?”
+
+가입기간과 출생연도를 확인합니다.`).articles[0];
+
+  assert.equal(article.title, "국민연금 수령 조건");
+  assert.match(article.bodySource, /^“국민연금은 언제부터 받을 수 있을까요\?”/);
+  assert.doesNotMatch(article.bodySource, /^국민연금 수령 조건(?:\n|$)/);
+});
+
+test("the first real question after a repeated label title is italicized at 16px", () => {
+  const article = formatArticles(markdownLabelWithRepeatedTitle).articles[0];
+  const payload = createCopyPayload(article);
+
+  assert.match(
+    payload.html,
+    /^<p[^>]*><em style="font-style:italic;font-size:16px;">“국민연금은 언제부터 받을 수 있을까요\?”<\/em><\/p>/,
+  );
+  assert.equal((payload.html.match(/<em\b/g) ?? []).length, 1);
+});
+
+test("an answer after a Markdown numbered label keeps exactly one paragraph gap before detail", () => {
+  const article = formatArticles(markdownLabelWithRepeatedTitle).articles[0];
+  const payload = createCopyPayload(article);
+  const answerWithSingleGap = /<p style="margin:0 0 18px;[^"]*"><strong>A: 가입 기간과 출생연도를 먼저 확인합니다\.<\/strong><\/p><p[^>]*>자세한 수령 조건은 가입내역에서 확인하세요\.<\/p>/;
+  const blankParagraph = /<p[^>]*>\s*<br\s*\/?>(?:\s*)<\/p>/g;
+
+  assert.match(article.html, answerWithSingleGap);
+  assert.match(payload.html, answerWithSingleGap);
+  assert.equal((payload.html.match(blankParagraph) ?? []).length, 0);
+  assert.match(
+    payload.plainText,
+    /A: 가입 기간과 출생연도를 먼저 확인합니다\.\n\n자세한 수령 조건은 가입내역에서 확인하세요\./,
+  );
+  assert.doesNotMatch(payload.plainText, /A: 가입 기간과 출생연도를 먼저 확인합니다\.\n{3,}/);
 });
 
 test("a numbered bundle drops its preamble, label, and plain title before styling the opening question at 16px", () => {
@@ -1581,6 +1684,35 @@ test("image generation sections are removed from the body and copied separately"
   assert.match(payload.html, /아래 이미지를 생성해주세요/);
 });
 
+test("thumbnail generation prompt headings are removed from the body and copied as image requests", () => {
+  const article = formatArticles(`# 가을 여행 준비
+
+단풍 여행 전에 준비할 내용을 정리합니다.
+
+### 썸네일 생성 프롬프트
+
+붉은 단풍길을 걷는 가족의 뒷모습
+문구는 ‘가을 여행 준비’만 크게 표시
+
+## 마무리
+
+본문 마지막 문장입니다.`).articles[0];
+
+  assert.equal(
+    article.imagePrompt,
+    "붉은 단풍길을 걷는 가족의 뒷모습\n문구는 ‘가을 여행 준비’만 크게 표시",
+  );
+  assert.doesNotMatch(article.plainText, /썸네일 생성 프롬프트|붉은 단풍길/);
+  assert.match(article.plainText, /단풍 여행 전에 준비할 내용을 정리합니다/);
+  assert.match(article.plainText, /마무리\n\n본문 마지막 문장입니다/);
+
+  const payload = createImagePromptPayload(article);
+  assert.equal(
+    payload.plainText,
+    "아래 이미지를 생성해주세요\n\n붉은 단풍길을 걷는 가족의 뒷모습\n문구는 ‘가을 여행 준비’만 크게 표시",
+  );
+});
+
 test("inline image prompts are separated without deleting ordinary text or fenced code", () => {
   const article = formatArticles(`# 이미지 경계
 
@@ -1601,6 +1733,89 @@ test("inline image prompts are separated without deleting ordinary text or fence
   assert.match(article.plainText, /코드 안 문구는 남습니다/);
   assert.match(article.plainText, /본문은 계속 남습니다/);
   assert.doesNotMatch(article.plainText, /푸른 하늘 아래 작은 흰색 집/);
+});
+
+test("a lone numbered image caption and numbered text before fenced code stay in the body", () => {
+  const loneCaption = formatArticles(`# 여행 사진 설명
+
+이미지 1 — 비교 전 화면
+
+이 문장은 이미지 생성 지시가 아니라 실제 본문 설명입니다.`).articles[0];
+  const beforeCode = formatArticles(`# 코드가 있는 이미지 설명
+
+이미지 1 — 제목 바로 아래
+
+이미지 예시를 먼저 설명합니다.
+
+이미지 2 — 2번 설명 뒤
+
+두 번째 예시입니다.
+
+\`\`\`js
+const imageCount = 2;
+\`\`\`
+
+코드 다음 본문도 남아야 합니다.`).articles[0];
+  const midBody = formatArticles(`# 본문 중간 이미지 설명
+
+이미지 1 — 제목 바로 아래
+
+첫 번째 화면을 설명합니다.
+
+이미지 2 — 2번 설명 뒤
+
+두 번째 화면을 설명합니다.
+
+이 문단부터는 계속 이어지는 실제 본문입니다.`).articles[0];
+  const afterSubheading = formatArticles(`# 소제목이 이어지는 이미지 설명
+
+#여행사진 #비교화면
+
+이미지 1 — 제목 바로 아래
+
+첫 번째 화면을 설명합니다.
+
+이미지 2 — 2번 설명 뒤
+
+두 번째 화면을 설명합니다.
+### 반드시 보존할 소제목
+
+소제목 아래 실제 본문입니다.`).articles[0];
+  const multilineInlineCode = formatArticles(`# 여러 줄 코드 예시
+
+\`\`
+이미지 1 — 제목 바로 아래
+이미지 2 — 2번 설명 뒤
+이미지 3 — 마지막 설명 뒤
+\`\`
+
+코드 예시 다음 본문입니다.`).articles[0];
+  const multilineCodeOnly = formatArticles(`# 여러 줄 코드만 있는 예시
+
+\`\`
+이미지 1 — 제목 바로 아래
+이미지 2 — 2번 설명 뒤
+이미지 3 — 마지막 설명 뒤
+\`\``).articles[0];
+
+  assert.equal(loneCaption.imagePrompt, "");
+  assert.match(loneCaption.plainText, /이미지 1 — 비교 전 화면/);
+  assert.match(loneCaption.plainText, /실제 본문 설명입니다/);
+  assert.equal(beforeCode.imagePrompt, "");
+  assert.match(beforeCode.plainText, /const imageCount = 2;/);
+  assert.match(beforeCode.plainText, /코드 다음 본문도 남아야 합니다/);
+  assert.equal(midBody.imagePrompt, "");
+  assert.match(midBody.plainText, /이미지 1 — 제목 바로 아래/);
+  assert.match(midBody.plainText, /계속 이어지는 실제 본문입니다/);
+  assert.equal(afterSubheading.imagePrompt, "");
+  assert.match(afterSubheading.plainText, /반드시 보존할 소제목/);
+  assert.match(afterSubheading.plainText, /소제목 아래 실제 본문입니다/);
+  assert.equal(multilineInlineCode.imagePrompt, "");
+  assert.match(multilineInlineCode.plainText, /이미지 3 — 마지막 설명 뒤/);
+  assert.match(multilineInlineCode.plainText, /코드 예시 다음 본문입니다/);
+  assert.equal(multilineCodeOnly.imagePrompt, "");
+  assert.match(multilineCodeOnly.plainText, /이미지 1 — 제목 바로 아래/);
+  assert.match(multilineCodeOnly.plainText, /이미지 3 — 마지막 설명 뒤/);
 });
 
 test("Everland articles keep the ride finder before hashtags and the final closing", () => {
@@ -1662,11 +1877,45 @@ test("every article receives the same fixed engagement closing automatically", (
     assert.match(article.plainText, /가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?/);
     assert.match(article.plainText, /댓글로 남겨주시면 다음 글에서 쉽게 정리해 보겠습니다\./);
     assert.match(article.plainText, /마지막으로 글이 도움이 되셨다면 공감으로 알려주시면 감사하겠습니다\.\^\^$/);
-    assert.match(article.html, /<strong>가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?<\/strong>/);
+    assert.match(article.html, /font-size:15px[^>]*>가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?<\/p>/);
     assert.match(article.plainText, /---\n\n가장 헷갈렸던 조건이나/);
     assert.equal((article.html.match(/<hr /g) ?? []).length, 1);
     assert.equal(article.engagementCtaTopic, "universal");
   }
+});
+
+test("the fixed closing uses 15px text with 19px partial emphasis and image-matched spacing", () => {
+  const article = formatArticles(`# 마무리 서식 확인
+
+본문입니다.`).articles[0];
+  const copyPayload = createCopyPayload(article);
+
+  for (const html of [article.html, copyPayload.html]) {
+    assert.match(
+      html,
+      /<p style="margin:0 0 10px;font-size:15px;[^>]*">가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?<\/p>/,
+    );
+    assert.doesNotMatch(html, /<strong>가장 헷갈렸던 조건이나/);
+    assert.doesNotMatch(
+      html,
+      /<p style="[^"]*font-weight:[^"]*"[^>]*>가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?/,
+    );
+    assert.match(
+      html,
+      /<p style="margin:0 0 10px;font-size:15px;[^>]*"><strong style="font-size:19px;">댓글로<\/strong> 남겨주시면 다음 글에서 쉽게 정리해 보겠습니다\.<\/p>/,
+    );
+    assert.match(
+      html,
+      /<p style="margin:30px 0 18px;font-size:15px;[^>]*">마지막으로 글이 도움이 되셨다면 <strong style="font-size:19px;">공감으로 알려주시면 감사<\/strong>하겠습니다\.\^\^<\/p>/,
+    );
+    assert.equal((html.match(/<strong style="font-size:19px;">/g) ?? []).length, 2);
+    assert.doesNotMatch(
+      html,
+      /<strong style="font-size:19px;">가장 헷갈렸던 조건이나/,
+    );
+  }
+  assert.equal(copyPayload.plainText, article.plainText);
+  assert.doesNotMatch(copyPayload.plainText, /\*\*|__/);
 });
 
 test("a different custom closing does not replace the required fixed closing", () => {
@@ -1718,7 +1967,7 @@ test("an existing generated finance question is not added twice", () => {
     1,
   );
   assert.equal(
-    (article.html.match(/<strong>가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?<\/strong>/g) ?? []).length,
+    (article.html.match(/>가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?<\/p>/g) ?? []).length,
     1,
   );
   assert.match(article.plainText, /댓글로 남겨주시면 다음 글에서 쉽게 정리해 보겠습니다/);
@@ -1741,6 +1990,25 @@ test("an existing fixed comment is moved into the canonical closing order", () =
   assert.equal((article.plainText.match(/댓글로 남겨주시면/g) ?? []).length, 1);
 });
 
+test("partially bold fixed closing lines are normalized without duplication", () => {
+  const article = formatArticles(`# 생활 안내
+
+본문입니다.
+
+가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요?
+
+**댓글로** 남겨주시면 다음 글에서 쉽게 정리해 보겠습니다.
+
+마지막으로 글이 도움이 되셨다면 **공감으로 알려주시면 감사**하겠습니다.^^`).articles[0];
+  const copyPayload = createCopyPayload(article);
+
+  assert.equal((article.plainText.match(/댓글로 남겨주시면/g) ?? []).length, 1);
+  assert.equal((article.plainText.match(/공감으로 알려주시면 감사/g) ?? []).length, 1);
+  assert.equal((copyPayload.html.match(/<strong style="font-size:19px;">댓글로<\/strong>/g) ?? []).length, 1);
+  assert.equal((copyPayload.html.match(/<strong style="font-size:19px;">공감으로 알려주시면 감사<\/strong>/g) ?? []).length, 1);
+  assert.doesNotMatch(article.plainText, /\*\*|__/);
+});
+
 test("the previous fixed closing is replaced by the revised wording", () => {
   const article = formatArticles(`# 생활 안내
 
@@ -1756,6 +2024,186 @@ test("the previous fixed closing is replaced by the revised wording", () => {
   assert.doesNotMatch(article.plainText, /^글이 도움이 되셨다면 공감/m);
   assert.match(article.plainText, /가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?/);
   assert.match(article.plainText, /마지막으로 글이 도움이 되셨다면 공감으로 알려주시면 감사하겠습니다\.\^\^$/);
+});
+
+test("duplicated legacy closing, hashtags, and numbered image instructions collapse into one canonical tail", () => {
+  const canonicalQuestion = "가장 헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요?";
+  const canonicalComment = "댓글로 남겨주시면 다음 글에서 쉽게 정리해 보겠습니다.";
+  const canonicalEmpathy = "마지막으로 글이 도움이 되셨다면 공감으로 알려주시면 감사하겠습니다.^^";
+  const hashtagLine = "#오대산, #월정사";
+  const imageInstructions = [
+    {
+      label: "이미지 1 — 제목 바로 아래",
+      prompt: "오대산 월정사 전나무숲 전경, 이른 아침 자연광, 인물 없음",
+    },
+    {
+      label: "이미지 2 — 2번 설명 뒤",
+      prompt: "월정사 팔각구층석탑과 가을 단풍, 여행 사진 스타일",
+    },
+    {
+      label: "이미지 3 — 3번 설명 뒤",
+      prompt: "오대산 탐방로 안내판과 걷는 가족의 뒷모습, 가로형",
+    },
+    {
+      label: "이미지 4 — 마무리 문단 위",
+      prompt: "월정사에서 바라본 노을 풍경, 따뜻하고 차분한 색감",
+    },
+  ];
+  const numberedImageInstructions = imageInstructions
+    .map(({ label, prompt }) => `${label}\n\n${prompt}`)
+    .join("\n\n");
+  const expectedImagePrompt = imageInstructions
+    .map(({ label, prompt }) => `${label}\n${prompt}`)
+    .join("\n\n");
+  const canonicalTail = [
+    hashtagLine,
+    "---",
+    canonicalQuestion,
+    canonicalComment,
+    canonicalEmpathy,
+  ].join("\n\n");
+
+  for (const legacyQuestion of [
+    "헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요?",
+    canonicalQuestion,
+  ]) {
+    const article = formatArticles(`# 오대산 월정사 여행 안내
+
+오대산과 월정사를 걷는 순서와 준비물을 정리합니다.
+
+${legacyQuestion}
+
+${hashtagLine}
+
+${numberedImageInstructions}
+
+---
+
+${canonicalQuestion}
+
+${canonicalComment}
+
+${canonicalEmpathy}
+
+## 개선안
+
+${canonicalQuestion}
+
+${canonicalComment}
+
+${canonicalEmpathy}
+
+${hashtagLine}
+
+${numberedImageInstructions}`).articles[0];
+    const copyPayload = createCopyPayload(article);
+    const imagePayload = createImagePromptPayload(article);
+
+    assert.equal(copyPayload.plainText, article.plainText, legacyQuestion);
+    assert.ok(article.plainText.endsWith(canonicalTail), legacyQuestion);
+    assert.equal(article.plainText.split(canonicalQuestion).length - 1, 1, legacyQuestion);
+    assert.equal(article.plainText.split(canonicalComment).length - 1, 1, legacyQuestion);
+    assert.equal(article.plainText.split(canonicalEmpathy).length - 1, 1, legacyQuestion);
+    assert.equal(article.plainText.split(hashtagLine).length - 1, 1, legacyQuestion);
+    assert.equal(copyPayload.html.split(canonicalQuestion).length - 1, 1, legacyQuestion);
+    assert.equal(
+      (copyPayload.html.match(/<strong style="font-size:19px;">댓글로<\/strong> 남겨주시면 다음 글에서 쉽게 정리해 보겠습니다\./g) ?? []).length,
+      1,
+      legacyQuestion,
+    );
+    assert.equal(
+      (copyPayload.html.match(/마지막으로 글이 도움이 되셨다면 <strong style="font-size:19px;">공감으로 알려주시면 감사<\/strong>하겠습니다\.\^\^/g) ?? []).length,
+      1,
+      legacyQuestion,
+    );
+    assert.equal(copyPayload.html.split(hashtagLine).length - 1, 1, legacyQuestion);
+    assert.equal((article.plainText.match(/^---$/gm) ?? []).length, 1, legacyQuestion);
+    assert.doesNotMatch(article.plainText, /^헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요\?$/m);
+    assert.doesNotMatch(article.plainText, /(?:^|\n)개선안(?:\n|$)/);
+    assert.doesNotMatch(article.plainText, /이미지 [1-4]\s*—/);
+    assert.doesNotMatch(copyPayload.html, /개선안|이미지 [1-4]\s*—/);
+    assert.equal(article.imagePrompt, expectedImagePrompt, legacyQuestion);
+    assert.equal(
+      imagePayload.plainText,
+      `아래 이미지를 생성해주세요\n\n${expectedImagePrompt}`,
+      legacyQuestion,
+    );
+    for (const { label, prompt } of imageInstructions) {
+      assert.equal(imagePayload.plainText.split(label).length - 1, 1, label);
+      assert.equal(imagePayload.plainText.split(prompt).length - 1, 1, prompt);
+    }
+    assert.doesNotMatch(imagePayload.plainText, /#오대산|#월정사|헷갈렸던 조건|댓글로|공감으로|개선안/);
+  }
+});
+
+test("numbered image instructions accept a section range such as 1~4번 설명 뒤", () => {
+  const article = formatArticles(`# 캐리비안베이 10월 할인
+
+10월 운영일과 삼성카드 할인 조건을 정리합니다.
+
+#캐리비안베이 #캐리비안베이할인
+
+이미지 1 — 제목 바로 아래
+가을 캐리비안베이 입구와 할인 티켓이 함께 보이는 이미지.
+문구는 ‘캐리비안베이 10월 22,500원에 간다?’ 정도만 크게 넣습니다.
+⠀
+이미지 2 — 1~4번 설명 뒤
+정상가 45,000원 → 삼성카드 본인 22,500원 / 동반인 27,000원을 비교하는 이미지.
+⠀
+이미지 3 — 5번 설명 뒤
+월 O / 화 휴장 / 수 휴장 / 목 O / 금 O / 토 O / 일 O를 달력 형태로 보여주는 이미지.
+⠀
+이미지 4 — 마지막 설명 뒤
+운영일 확인 → 카드조건 확인 → 스마트예약 → 당일 운영시설 확인 순서를 보여주는 이미지.`).articles[0];
+
+  assert.match(article.imagePrompt, /^이미지 1 — 제목 바로 아래/m);
+  assert.match(article.imagePrompt, /^이미지 2 — 1~4번 설명 뒤/m);
+  assert.match(article.imagePrompt, /^이미지 3 — 5번 설명 뒤/m);
+  assert.match(article.imagePrompt, /^이미지 4 — 마지막 설명 뒤/m);
+  assert.equal((article.imagePrompt.match(/^이미지 [1-4] —/gm) ?? []).length, 4);
+  assert.doesNotMatch(article.plainText, /이미지 [1-4] —|캐리비안베이 입구와 할인 티켓/);
+  assert.match(createImagePromptPayload(article).plainText, /이미지 2 — 1~4번 설명 뒤/);
+});
+
+test("an incomplete numbered-image range keeps the whole instruction block in the body", () => {
+  const article = formatArticles(`# 이미지 범위 오입력
+
+본문입니다.
+
+이미지 1 — 제목 바로 아래
+첫 번째 이미지 설명입니다.
+
+이미지 2 — 1~번 설명 뒤
+두 번째 이미지 설명입니다.
+
+이미지 3 — 5번 설명 뒤
+세 번째 이미지 설명입니다.
+
+이미지 4 — 마지막 설명 뒤
+네 번째 이미지 설명입니다.`).articles[0];
+
+  assert.equal(article.imagePrompt, "");
+  assert.match(article.plainText, /이미지 1 — 제목 바로 아래/);
+  assert.match(article.plainText, /이미지 2 — 1~번 설명 뒤/);
+  assert.match(article.plainText, /이미지 4 — 마지막 설명 뒤/);
+});
+
+test("an editorial improvement tail is removed even when it has no hashtags", () => {
+  const article = formatArticles(`# 국민연금 수령 조건
+
+본문입니다.
+
+## 개선안
+
+헷갈렸던 조건이나 더 궁금한 내용이 더 있으신가요?
+
+댓글로 남겨주시면 다음 글에서 쉽게 정리해 보겠습니다.
+
+마지막으로 글이 도움이 되셨다면 공감으로 알려주시면 감사하겠습니다.^^`).articles[0];
+
+  assert.doesNotMatch(article.plainText, /(?:^|\n)개선안(?:\n|$)/);
+  assert.equal((article.plainText.match(/더 궁금한 내용이 더 있으신가요\?/g) ?? []).length, 1);
+  assert.ok(article.plainText.endsWith("마지막으로 글이 도움이 되셨다면 공감으로 알려주시면 감사하겠습니다.^^"));
 });
 
 test("an already formatted hashtag-divider-closing tail remains one canonical article", () => {
@@ -2012,7 +2460,10 @@ test("body copy starts without a divider, excludes the title, and preserves the 
 
   assert.match(titled.html, /^<h1[^>]*>복사 점검<\/h1>/);
   assert.equal(titled.plainText, `복사 점검\n\n${article.plainText}`);
-  assert.deepEqual(createImagePromptPayload(article), { html: "", plainText: "" });
+  assert.deepEqual(createImagePromptPayload(article), {
+    html: '<p style="margin:0;font-size:16px;line-height:1.6;font-weight:700;"><strong>아래 이미지를 생성해주세요</strong></p>',
+    plainText: "아래 이미지를 생성해주세요",
+  });
 });
 
 test("body copy removes an existing leading divider", () => {

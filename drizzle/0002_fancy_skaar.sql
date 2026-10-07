@@ -1,0 +1,1 @@
+ALTER TABLE `article_bundles` ADD `article_type` text DEFAULT 'information' NOT NULL;

@@ -24,6 +24,7 @@ export type ArticleBundleEntry = {
   displayTitle: string;
   sourceText: string;
   headerColor: string;
+  articleType: "information" | "advertisement";
   articleTitles: readonly string[];
   createdAt: string;
   updatedAt: string;
@@ -32,6 +33,7 @@ export type ArticleBundleEntry = {
 type SaveArticleBundleInput = {
   sourceText: string;
   headerColor: string;
+  articleType: "information" | "advertisement";
   articleTitles: readonly string[];
 };
 
@@ -91,6 +93,7 @@ export function useArticleBundles() {
           id,
           sourceText: input.sourceText,
           headerColor: input.headerColor,
+          articleType: input.articleType,
           articleTitles: [...input.articleTitles],
           createdAt: existing?.createdAt ?? timestamp,
           updatedAt: timestamp,

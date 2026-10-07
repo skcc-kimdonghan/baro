@@ -11,14 +11,16 @@ const installerUrl = new URL("../scripts/install-macos-autostart.zsh", import.me
 const runtimeEntitlementsUrl = new URL("../scripts/node-runtime-entitlements.plist", import.meta.url);
 const packageUrl = new URL("../package.json", import.meta.url);
 
-test("desktop launcher checks the dedicated static health marker", async () => {
+test("desktop launcher checks the static marker and authenticated local data API readiness", async () => {
   const launcher = await readFile(launcherUrl, "utf8");
   const readinessFunction = launcher.match(/site_is_ready\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
 
   assert.match(readinessFunction, /baro-health\.txt/);
   assert.match(readinessFunction, /grep --fixed-strings --line-regexp/);
+  assert.match(readinessFunction, /\$\{service_url\}\/api\/local-data/);
+  assert.match(readinessFunction, /x-baro-publish-token:\s*\$\{local_access_token\}/i);
   assert.match(readinessFunction, /--write-out '%\{http_code\}'/);
-  assert.match(readinessFunction, /root_status.*== "200"/s);
+  assert.match(readinessFunction, /local_data_status.*== "200"/s);
   assert.match(launcher, /listener_is_ours/);
 });
 
@@ -95,6 +97,60 @@ test("desktop launcher creates a private capability and opens it only in a URL f
   assert.match(launcher, /#baro-token=/);
   assert.match(launcher, /prepare_access_token.*open_site/s);
   assert.doesNotMatch(launcher, /\?baro-token=/);
+});
+
+test("desktop launcher refreshes the current-token webloc before reusing an existing server", async () => {
+  const launcher = await readFile(launcherUrl, "utf8");
+  const accessTokenFunction = launcher.match(/prepare_access_token\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const main = launcher.slice(launcher.indexOf("if ! prepare_private_paths;"));
+  const prepareIndex = main.indexOf("if ! prepare_access_token;");
+  const reuseIndex = main.indexOf("if site_is_ready; then");
+  const reuseBranch = main.slice(reuseIndex, main.indexOf("\nfi", reuseIndex));
+
+  assert.match(accessTokenFunction, /#baro-token=\$\{local_access_token\}/);
+  assert.match(accessTokenFunction, /mv -f "\$\{link_temp\}" "\$\{access_link_path\}"/);
+  assert.ok(prepareIndex >= 0 && prepareIndex < reuseIndex);
+  assert.match(reuseBranch, /open_site/);
+  assert.match(reuseBranch, /exit 0/);
+});
+
+test("desktop launcher allows 60 seconds for authenticated database readiness", async () => {
+  const launcher = await readFile(launcherUrl, "utf8");
+  const waitFunction = launcher.match(/wait_until_ready\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+
+  assert.match(waitFunction, /deadline=.*\+ 60/s);
+  assert.doesNotMatch(waitFunction, /deadline=.*\+ 30/s);
+  assert.match(launcher, /서버가 60초 안에 준비되지 않아 중지했습니다\./);
+  assert.doesNotMatch(launcher, /서버가 30초 안에 준비되지 않아 중지했습니다\./);
+});
+
+test("desktop launcher lock timeout exceeds the full startup readiness budget", async () => {
+  const launcher = await readFile(launcherUrl, "utf8");
+  const waitFunction = launcher.match(/wait_until_ready\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const startupBudget = Number(waitFunction.match(/deadline=.*\+\s*(\d+)/s)?.[1]);
+  const lockTimeout = Number(launcher.match(/lockf\s+-k\s+-t\s+(\d+)/)?.[1]);
+
+  assert.equal(startupBudget, 60);
+  assert.ok(Number.isFinite(lockTimeout));
+  assert.ok(lockTimeout > startupBudget, "the outer lock must not expire before startup readiness");
+});
+
+test("wait_until_ready passes one absolute deadline and every readiness probe uses its remaining time", async () => {
+  const launcher = await readFile(launcherUrl, "utf8");
+  const readinessFunction = launcher.match(/site_is_ready\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const waitFunction = launcher.match(/wait_until_ready\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const probeCount = (readinessFunction.match(/\/usr\/bin\/curl\b/g) ?? []).length;
+  const remainingCalculations = readinessFunction.match(
+    /probe_timeout=\$\(\(\s*deadline\s*-\s*\$\(\/bin\/date \+%s\)\s*\)\)/g,
+  ) ?? [];
+  const boundedProbes = readinessFunction.match(/--max-time "\$\{probe_timeout\}"/g) ?? [];
+
+  assert.match(readinessFunction, /local\s+deadline="\$\{1/);
+  assert.match(waitFunction, /site_is_ready\s+"\$\{deadline\}"/);
+  assert.equal(probeCount, 3);
+  assert.equal(remainingCalculations.length, probeCount);
+  assert.equal(boundedProbes.length, probeCount);
+  assert.doesNotMatch(readinessFunction, /--max-time\s+(?:1|2)\b/);
 });
 
 test("desktop launcher supports quiet background startup", async () => {

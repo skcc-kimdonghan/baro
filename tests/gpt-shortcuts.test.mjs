@@ -7,6 +7,7 @@ import {
   addGptShortcut,
   createGptShortcut,
   loadGptShortcuts,
+  moveGptShortcut,
   removeGptShortcut,
   saveGptShortcuts,
   shortcutLinkProps,
@@ -32,12 +33,13 @@ class FakeStorage {
 }
 
 function shortcut(index = 1, overrides = {}) {
+  const seconds = String(index).padStart(2, "0");
   return createGptShortcut({
     id: `shortcut-${index}`,
     name: `채팅 ${index}`,
     url: `https://chatgpt.com/c/chat-${index}`,
-    createdAt: `2026-10-01T00:00:0${index}.000Z`,
-    updatedAt: `2026-10-01T00:00:0${index}.000Z`,
+    createdAt: `2026-10-01T00:00:${seconds}.000Z`,
+    updatedAt: `2026-10-01T00:00:${seconds}.000Z`,
     ...overrides,
   });
 }
@@ -180,16 +182,46 @@ test("duplicate names and URLs are rejected without changing saved entries", () 
   assert.equal(original.length, 1);
 });
 
-test("a seventh GPT shortcut is rejected without mutating the saved six", () => {
+test("ten shortcuts are allowed and an eleventh is rejected without mutation", () => {
   const original = Object.freeze(
     Array.from({ length: MAX_GPT_SHORTCUTS }, (_, index) => shortcut(index + 1)),
   );
 
+  assert.equal(MAX_GPT_SHORTCUTS, 10);
   assert.throws(
-    () => addGptShortcut(original, shortcut(7)),
+    () => addGptShortcut(original, shortcut(11)),
     (error) => error instanceof Error && error.code === "GPT_SHORTCUT_LIMIT_REACHED",
   );
   assert.equal(original.length, MAX_GPT_SHORTCUTS);
+});
+
+test("moving a shortcut up or down returns a frozen reordered copy", () => {
+  const original = Object.freeze([shortcut(1), shortcut(2), shortcut(3)]);
+
+  const movedUp = moveGptShortcut(original, "shortcut-3", "up");
+  const movedDown = moveGptShortcut(movedUp, "shortcut-1", "down");
+
+  assert.deepEqual(original.map((entry) => entry.id), ["shortcut-1", "shortcut-2", "shortcut-3"]);
+  assert.deepEqual(movedUp.map((entry) => entry.id), ["shortcut-1", "shortcut-3", "shortcut-2"]);
+  assert.deepEqual(movedDown.map((entry) => entry.id), ["shortcut-3", "shortcut-1", "shortcut-2"]);
+  assert.equal(movedUp[1].updatedAt, original[2].updatedAt);
+  assert.ok(Object.isFrozen(movedUp));
+  assert.ok(movedUp.every(Object.isFrozen));
+});
+
+test("moving at a list boundary is a safe no-op and invalid moves are rejected", () => {
+  const original = Object.freeze([shortcut(1), shortcut(2)]);
+
+  assert.deepEqual(moveGptShortcut(original, "shortcut-1", "up"), original);
+  assert.deepEqual(moveGptShortcut(original, "shortcut-2", "down"), original);
+  assert.throws(
+    () => moveGptShortcut(original, "missing", "up"),
+    (error) => error instanceof Error && error.code === "GPT_SHORTCUT_NOT_FOUND",
+  );
+  assert.throws(
+    () => moveGptShortcut(original, "shortcut-1", "sideways"),
+    (error) => error instanceof Error && error.code === "INVALID_GPT_SHORTCUT_MOVE",
+  );
 });
 
 test("updating keeps the same id, timestamps, and list position", () => {
@@ -250,6 +282,19 @@ test("shortcuts save and restore in display order", () => {
   assert.deepEqual(loadGptShortcuts(storage), { entries, warning: "", storageError: false });
 });
 
+test("ten long shortcuts fit the legacy storage envelope and preserve order", () => {
+  const storage = new FakeStorage();
+  const entries = Array.from({ length: MAX_GPT_SHORTCUTS }, (_, index) => shortcut(index + 1, {
+    url: `https://chatgpt.com/c/${index + 1}/${"a".repeat(1_900)}`,
+  }));
+
+  const saved = saveGptShortcuts(storage, entries);
+  const loaded = loadGptShortcuts(storage);
+
+  assert.equal(saved.length, 10);
+  assert.deepEqual(loaded.entries.map((entry) => entry.id), entries.map((entry) => entry.id));
+});
+
 test("corrupt, wrong-root, and mixed saved values recover safely", () => {
   const corrupt = new FakeStorage({ [GPT_SHORTCUT_STORAGE_KEY]: "{broken" });
   const wrongRoot = new FakeStorage({ [GPT_SHORTCUT_STORAGE_KEY]: JSON.stringify({ entries: [] }) });
@@ -274,7 +319,7 @@ test("too many saved shortcuts are capped with a warning", () => {
 
   const loaded = loadGptShortcuts(storage);
   assert.equal(loaded.entries.length, MAX_GPT_SHORTCUTS);
-  assert.match(loaded.warning, /6개/);
+  assert.match(loaded.warning, /10개/);
 });
 
 test("storage read and write failures become user-facing errors", () => {

@@ -15,6 +15,13 @@
       "when": 1790920687056,
       "tag": "0001_handy_the_santerians",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791353565735,
+      "tag": "0002_fancy_skaar",
+      "breakpoints": true
     }
   ]
 }

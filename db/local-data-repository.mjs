@@ -8,10 +8,11 @@ const SCHEMA_STATEMENTS = Object.freeze([
     header_color TEXT NOT NULL,
     article_titles_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    article_type TEXT DEFAULT 'information' NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS article_bundles_updated_at_idx
-    ON article_bundles (updated_at DESC, id ASC)`,
+    ON article_bundles (updated_at, id)`,
   `CREATE TABLE IF NOT EXISTS publication_history (
     id TEXT PRIMARY KEY NOT NULL,
     schema_version INTEGER NOT NULL,
@@ -23,7 +24,7 @@ const SCHEMA_STATEMENTS = Object.freeze([
     updated_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS publication_history_completed_at_idx
-    ON publication_history (completed_at DESC, id ASC)`,
+    ON publication_history (completed_at, id)`,
   `CREATE TABLE IF NOT EXISTS gpt_shortcuts (
     id TEXT PRIMARY KEY NOT NULL,
     schema_version INTEGER NOT NULL,
@@ -34,7 +35,7 @@ const SCHEMA_STATEMENTS = Object.freeze([
     updated_at TEXT NOT NULL
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS gpt_shortcuts_name_idx
-    ON gpt_shortcuts (name COLLATE NOCASE)`,
+    ON gpt_shortcuts (name)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS gpt_shortcuts_url_idx
     ON gpt_shortcuts (url)`,
   `CREATE TABLE IF NOT EXISTS collection_revisions (
@@ -71,6 +72,7 @@ function mapArticleBundle(row) {
     id: row.id,
     sourceText: row.source_text,
     headerColor: row.header_color,
+    articleType: row.article_type,
     articleTitles: parseJson(row.article_titles_json, "글뭉치"),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -104,18 +106,19 @@ function mapShortcut(row) {
 const COLLECTION_CONFIG = Object.freeze({
   articleBundles: Object.freeze({
     table: "article_bundles",
-    select: `SELECT schema_version, id, source_text, header_color, article_titles_json,
+    select: `SELECT schema_version, id, source_text, header_color, article_type, article_titles_json,
       created_at, updated_at FROM article_bundles ORDER BY updated_at DESC, id ASC`,
     map: mapArticleBundle,
     insert(database, entry) {
       return database.prepare(`INSERT INTO article_bundles
-        (id, schema_version, source_text, header_color, article_titles_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        (id, schema_version, source_text, header_color, article_type, article_titles_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(
           entry.id,
           entry.schemaVersion,
           entry.sourceText,
           entry.headerColor,
+          entry.articleType,
           JSON.stringify(entry.articleTitles),
           entry.createdAt,
           entry.updatedAt,
